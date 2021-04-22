@@ -193,6 +193,11 @@ const ZoomableImage: React.FC<IZoomableImageProps> = ({
             width: `${width}px`,
             height: `${height}px`,
           }}
+          info={
+            ['psd', 'tiff'].includes(extension)
+              ? `${extension.toUpperCase()}-files are currently not fully supported`
+              : undefined
+          }
         />
       ) : VIDEO_EXTENSIONS.includes(extension as IMG_EXTENSIONS_TYPE) ? (
         <video controls style={{ maxWidth: width, maxHeight: height, margin: 'auto' }} key={src}>

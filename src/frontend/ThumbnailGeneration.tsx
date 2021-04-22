@@ -9,6 +9,8 @@ import { ID } from 'src/entities/ID';
 import { ClientFile } from 'src/entities/File';
 
 import StoreContext from './contexts/StoreContext';
+import ExifIO from 'src/backend/ExifIO';
+import { getThumbnailPath } from './utils';
 
 export interface IThumbnailMessage {
   filePath: string;
@@ -40,16 +42,25 @@ export const ensureThumbnail = action(async (file: ClientFile, thumbnailDir: str
   const thumbnailPath = file.thumbnailPath.split('?v=1')[0]; // remove ?v=1 that might have been added by the useWorkerListener down below
   const thumbnailExists = await fse.pathExists(thumbnailPath);
   if (!thumbnailExists) {
-    // TODO: If PSD, extract thumbnail using ExifTool
-
-    const msg: IThumbnailMessage = {
-      filePath: file.absolutePath,
-      thumbnailDirectory: thumbnailDir,
-      thumbnailType,
-      fileId: file.id,
-    };
-    workers[lastSubmittedWorker].postMessage(msg);
-    lastSubmittedWorker = (lastSubmittedWorker + 1) % workers.length;
+    // If PSD, extract thumbnail using ExifTool
+    // will be low resolution (< 200px), but better than nothing
+    // won't work for TIFFs (but worth a shot, haven't tested it)
+    // https://exiftool.org/forum/index.php?topic=3273.0
+    // will have to show something in slide mode like "Format not supported, click [here] to open externally"
+    // TODO: Check other embedded thumbnail exif tags
+    if (['psd', 'tiff'].includes(file.extension)) {
+      await ((window as any).exifIO as ExifIO).extractThumbnail(file.absolutePath, thumbnailPath);
+      return true;
+    } else {
+      const msg: IThumbnailMessage = {
+        filePath: file.absolutePath,
+        thumbnailDirectory: thumbnailDir,
+        thumbnailType,
+        fileId: file.id,
+      };
+      workers[lastSubmittedWorker].postMessage(msg);
+      lastSubmittedWorker = (lastSubmittedWorker + 1) % workers.length;
+    }
   }
   return thumbnailExists;
 });

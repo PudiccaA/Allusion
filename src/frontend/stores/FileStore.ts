@@ -61,6 +61,7 @@ class FileStore {
 
     this.exifTool = new ExifIO();
     this.exifTool.initialize().catch(console.error);
+    (window as any).exifIO = this.exifTool; // UGLY
   }
 
   @action.bound async readTagsFromFiles() {

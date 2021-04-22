@@ -383,9 +383,20 @@ const Thumbnail = observer(({ file, mounted, uiStore, forceNoThumbnail }: IThumb
   }
 });
 
-export const MissingImageFallback = ({ style }: { style?: React.CSSProperties }) => (
+export const MissingImageFallback = ({
+  style,
+  info,
+}: {
+  style?: React.CSSProperties;
+  info?: string;
+}) => (
   <div style={style} className="image-error custom-icon-128">
     {IconSet.DB_ERROR}Could not load image
+    {info && (
+      <p>
+        <small>{info}</small>
+      </p>
+    )}
   </div>
 );
 
