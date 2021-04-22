@@ -40,6 +40,8 @@ export const ensureThumbnail = action(async (file: ClientFile, thumbnailDir: str
   const thumbnailPath = file.thumbnailPath.split('?v=1')[0]; // remove ?v=1 that might have been added by the useWorkerListener down below
   const thumbnailExists = await fse.pathExists(thumbnailPath);
   if (!thumbnailExists) {
+    // TODO: If PSD, extract thumbnail using ExifTool
+
     const msg: IThumbnailMessage = {
       filePath: file.absolutePath,
       thumbnailDirectory: thumbnailDir,

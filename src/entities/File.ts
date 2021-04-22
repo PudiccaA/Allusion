@@ -1,5 +1,5 @@
 import fse from 'fs-extra';
-import ImageSize from 'image-size';
+// import ImageSize from 'image-size';
 import { ISizeCalculationResult } from 'image-size/dist/types/interface';
 import {
   action,
@@ -10,15 +10,43 @@ import {
   reaction,
 } from 'mobx';
 import Path from 'path';
+import ExifIO from 'src/backend/ExifIO';
 import FileStore from 'src/frontend/stores/FileStore';
-import { promisify } from 'util';
+// import { promisify } from 'util';
 import { ID, IResource, ISerializable } from './ID';
 import { ClientTag } from './Tag';
 
-const sizeOf = promisify(ImageSize);
+// const sizeOf = promisify(ImageSize);
 
-export const IMG_EXTENSIONS = ['gif', 'png', 'jpg', 'jpeg', 'webp', 'tiff', 'bmp'] as const;
+// todo; rename to "supported extensions"?
+export const IMG_EXTENSIONS = [
+  'gif',
+  'png',
+  'jpg',
+  'jpeg',
+  'webp',
+  'tiff',
+  'bmp',
+  'psd',
+  'mp4',
+  'mov',
+  'wmv',
+  'webm',
+  'mkv',
+  'avi',
+  'avchd',
+] as const;
 export type IMG_EXTENSIONS_TYPE = typeof IMG_EXTENSIONS[number];
+
+export const VIDEO_EXTENSIONS: IMG_EXTENSIONS_TYPE[] = [
+  'mp4',
+  'mov',
+  'wmv',
+  'webm',
+  'mkv',
+  'avi',
+  'avchd',
+];
 
 /** Retrieved file meta data information */
 interface IMetaData {
@@ -174,11 +202,12 @@ export class ClientFile implements ISerializable<IFile> {
 }
 
 /** Should be called when after constructing a file before sending it to the backend. */
-export async function getMetaData(path: string): Promise<IMetaData> {
+export async function getMetaData(path: string, exifIO: ExifIO): Promise<IMetaData> {
   const stats = await fse.stat(path);
   let dimensions: ISizeCalculationResult | undefined;
   try {
-    dimensions = await sizeOf(path);
+    // dimensions = await sizeOf(path);
+    dimensions = await exifIO.readImageDimensions(path);
   } catch (e) {
     if (!dimensions) {
       console.error('Could not find dimensions for ', path);
@@ -190,8 +219,8 @@ export async function getMetaData(path: string): Promise<IMetaData> {
     name: Path.basename(path),
     extension: Path.extname(path).slice(1).toLowerCase(),
     size: stats.size,
-    width: (dimensions && dimensions.width) || 0,
-    height: (dimensions && dimensions.height) || 0,
+    width: dimensions?.width || 0,
+    height: dimensions?.height || 0,
     dateCreated: stats.birthtime,
   };
 }

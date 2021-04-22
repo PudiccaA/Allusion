@@ -230,6 +230,31 @@ class ExifIO {
       console.error('Could not update file metadata', res);
     }
   }
+
+  async readImageDimensions(file: string): Promise<{ width: number; height: number }> {
+    const metadata = await ep.readMetadata(file, ['ImageWidth', 'ImageHeight', 'ImageSize']);
+    if (metadata.error || !metadata.data?.[0]) {
+      throw new Error(metadata.error || 'No metadata entries found');
+    }
+    console.log(metadata);
+    // could fall back to imageSize dependency
+    const entry = metadata.data[0];
+
+    if ('ImageSize' in entry) {
+      const split = entry.ImageSize?.split('x');
+      if (split?.length === 2) {
+        return {
+          width: parseInt(split[0]),
+          height: parseInt(split[1]),
+        };
+      }
+    }
+
+    return {
+      width: entry.ImageWidth ? parseInt(entry.ImageWidth) : 0,
+      height: entry.ImageHeight ? parseInt(entry.ImageHeight) : 0,
+    };
+  }
 }
 
 export default ExifIO;

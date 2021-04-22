@@ -60,6 +60,7 @@ class FileStore {
     PersistentPreferenceFields.forEach((f) => observe(this, f, debouncedPersist));
 
     this.exifTool = new ExifIO();
+    this.exifTool.initialize().catch(console.error);
   }
 
   @action.bound async readTagsFromFiles() {
@@ -129,8 +130,6 @@ class FileStore {
         },
         toastKey,
       );
-    } finally {
-      await this.exifTool.close();
     }
   }
 
@@ -183,8 +182,6 @@ class FileStore {
         },
         toastKey,
       );
-    } finally {
-      this.exifTool.close();
     }
   }
 

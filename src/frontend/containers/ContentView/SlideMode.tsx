@@ -9,6 +9,7 @@ import { createSubmitCommand } from './LayoutSwitcher';
 import { GallerySelector, MissingImageFallback } from './GalleryItem';
 import UiStore from 'src/frontend/stores/UiStore';
 import FileStore from 'src/frontend/stores/FileStore';
+import { IMG_EXTENSIONS_TYPE, VIDEO_EXTENSIONS } from 'src/entities/File';
 
 interface ISlideMode {
   contentRect: { width: number; height: number };
@@ -146,6 +147,7 @@ const SlideView = observer((props: ISlideView) => {
   return (
     <ZoomableImage
       src={file.absolutePath}
+      extension={file.extension}
       width={width}
       height={height}
       prevImage={uiStore.firstItem - 1 >= 0 ? decrImgIndex : undefined}
@@ -157,6 +159,7 @@ const SlideView = observer((props: ISlideView) => {
 
 interface IZoomableImageProps {
   src: string;
+  extension: string;
   width: number;
   height: number;
   prevImage?: () => any;
@@ -166,6 +169,7 @@ interface IZoomableImageProps {
 
 const ZoomableImage: React.FC<IZoomableImageProps> = ({
   src,
+  extension,
   width,
   height,
   prevImage,
@@ -190,6 +194,10 @@ const ZoomableImage: React.FC<IZoomableImageProps> = ({
             height: `${height}px`,
           }}
         />
+      ) : VIDEO_EXTENSIONS.includes(extension as IMG_EXTENSIONS_TYPE) ? (
+        <video controls style={{ maxWidth: width, maxHeight: height, margin: 'auto' }} key={src}>
+          <source src={src} type="video/mp4" />
+        </video>
       ) : (
         // https://github.com/bradstiff/react-responsive-pinch-zoom-pan
         <PinchZoomPan

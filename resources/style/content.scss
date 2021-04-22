@@ -46,13 +46,13 @@
   transition: background-color 0.2s $pt-transition-cubic2;
 
   // This acts as the border-radius, but also for child elements
-  :first-child {
+  :first-child:not(video) {
     clip-path: inset(0 round 0.125rem);
     transition: clip-path 0.2s $pt-transition-cubic2;
     pointer-events: none;
   }
 
-  > img {
+  > img, video {
     width: 100%;
     height: 100%;
     cursor: pointer;
@@ -65,7 +65,7 @@
   &[data-dnd-target='true'] {
     background-color: var(--accent-color-yellow);
 
-    img {
+    img, video {
       clip-path: inset(0.5rem round 0.125rem);
     }
   }
@@ -224,12 +224,12 @@
     align-self: center;
     display: inline-block;
 
-    img {
+    img, video {
       transition: transform 0.2s ease;
       transform-origin: top left;
     }
     &:hover {
-      img {
+      img, video {
         transform: scale(10);
         z-index: 9000; // >:)
         position: relative;
@@ -309,6 +309,7 @@
 
 #zoomable-image {
   position: relative;
+  display: flex;
   min-width: 224px;
 
   img {

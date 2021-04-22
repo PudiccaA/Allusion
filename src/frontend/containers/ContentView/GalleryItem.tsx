@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { observer } from 'mobx-react-lite';
-import { ClientFile, IFile } from 'src/entities/File';
+import { ClientFile, IFile, IMG_EXTENSIONS_TYPE, VIDEO_EXTENSIONS } from 'src/entities/File';
 import { encodeFilePath, formatDateTime, humanFileSize } from 'src/frontend/utils';
 import { IconSet, Tag } from 'widgets';
 import { Tooltip } from 'widgets/popovers';
@@ -325,17 +325,19 @@ const Thumbnail = observer(({ file, mounted, uiStore, forceNoThumbnail }: IThumb
     if (!mounted && isBroken === true) {
       return;
     }
-    ensureThumbnail(file, thumbnailDirectory)
-      .then((exists) => {
-        if (isMounted && exists) {
-          setState(ThumbnailState.Ok);
-        } else if (isBroken !== true && isMounted) {
-          setState(ThumbnailState.Loading);
-        } else if (isMounted) {
-          setState(ThumbnailState.Error);
-        }
-      })
-      .catch(() => setState(ThumbnailState.Error));
+    if (!VIDEO_EXTENSIONS.includes(file.extension as IMG_EXTENSIONS_TYPE)) {
+      ensureThumbnail(file, thumbnailDirectory)
+        .then((exists) => {
+          if (isMounted && exists) {
+            setState(ThumbnailState.Ok);
+          } else if (isBroken !== true && isMounted) {
+            setState(ThumbnailState.Loading);
+          } else if (isMounted) {
+            setState(ThumbnailState.Error);
+          }
+        })
+        .catch(() => setState(ThumbnailState.Error));
+    }
 
     return () => {
       isMounted = false;
@@ -351,6 +353,16 @@ const Thumbnail = observer(({ file, mounted, uiStore, forceNoThumbnail }: IThumb
     }
   }, [thumbnailPath, mounted]);
 
+  if (VIDEO_EXTENSIONS.includes(file.extension as IMG_EXTENSIONS_TYPE)) {
+    return (
+      // Preload only metadata. Should be only grabbing thumbnail I hope
+      // TODO: Custom controls? Play on hover?
+      // does the type=video/? matter?
+      <video controls preload="metadata">
+        <source src={`${file.absolutePath}#t=0.5`} type="video/mp4" />
+      </video>
+    );
+  }
   if (state === ThumbnailState.Ok) {
     // When the thumbnail cannot be loaded, display an error
     const handleImageError = () => {
