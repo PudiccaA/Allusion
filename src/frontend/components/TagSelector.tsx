@@ -21,6 +21,7 @@ export interface TagSelectorProps {
     inputText: string,
     resetTextBox: () => void,
   ) => ReactElement<RowProps> | ReactElement<RowProps>[];
+  tempStyle?: boolean;
 }
 
 const TagSelector = (props: TagSelectorProps) => {
@@ -33,6 +34,7 @@ const TagSelector = (props: TagSelectorProps) => {
     disabled,
     extraIconButtons,
     renderCreateOption,
+    tempStyle
   } = props;
   const gridId = useRef(generateWidgetId('__suggestions')).current;
   const inputRef = useRef<HTMLInputElement>(null);
@@ -109,7 +111,7 @@ const TagSelector = (props: TagSelectorProps) => {
       aria-expanded={isOpen}
       aria-haspopup="grid"
       aria-owns={gridId}
-      className="input multiautocomplete tag-selector"
+      className={tempStyle ? "input multiautocompleteTemp tag-selector" : "input multiautocomplete tag-selector"}
       onBlur={handleBlur}
     >
       <Flyout

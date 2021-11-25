@@ -46,6 +46,12 @@
     max-height: 1.75rem;
     overflow: hidden auto;
   }
+
+  &.multiautocompleteTemp {
+    // max-height: 1.75rem;
+    height: 400px;
+    overflow: hidden auto;
+  }
 }
 
 /** We cannot use <input type="file" /> as we want to pick directories. However,

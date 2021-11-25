@@ -38,6 +38,7 @@ const FileTags = observer(({ file }: IFileTagProp) => {
       onDeselect={file.removeTag}
       onSelect={file.addTag}
       renderCreateOption={renderCreateOption}
+      tempStyle={true}
     />
   );
 });
