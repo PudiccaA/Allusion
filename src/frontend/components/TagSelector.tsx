@@ -120,8 +120,8 @@ const TagSelector = (props: TagSelectorProps) => {
         placement="bottom-start"
         ignoreCloseForElementOnBlur={inputRef.current || undefined}
         target={
-          <div className="multiautocomplete-input">
-            <div className="input-wrapper">
+          <div className={tempStyle ? "multiautocomplete-input-temp" : "multiautocomplete-input"}>
+            <div className={tempStyle ? "input-wrapper-temp" : "input-wrapper"}>
               {selection.map((t) => (
                 <SelectedTag key={t.id} tag={t} onDeselect={onDeselect} onTagClick={onTagClick} />
               ))}

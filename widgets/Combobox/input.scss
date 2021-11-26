@@ -25,6 +25,38 @@
   }
 }
 
+.multiautocomplete-input-temp {
+  width: 100%;
+  display: flex;
+  align-items: flex-start;
+  height: 100%;
+  overflow: hidden;
+
+  > .input-wrapper-temp {
+    display: flex;
+    flex-grow: 1;
+    flex-wrap: wrap;
+    height: 100%;
+    overflow: hidden;
+  }
+
+  input {
+    //width: 15ch;
+    width: 100%;
+    flex-grow: 1;
+  }
+
+  > .btn-icon {
+    min-width: 1.5rem;
+    min-height: 1.5rem;
+
+    .custom-icon {
+      height: 1rem;
+      width: 1rem;
+    }
+  }
+}
+
 .input {
   height: 28px;
   background: var(--input-color);
