@@ -49,7 +49,7 @@ interface ILabelProps {
 }
 
 const Label = (props: ILabelProps) => {
-  console.log('%c isEditing?: ', 'background: #0d3740; color: #ffd700', props.isEditing);
+  // console.log('%c isEditing?: ', 'background: #0d3740; color: #ffd700', props.isEditing);
 
   return (
   props.isEditing ? (
@@ -60,7 +60,7 @@ const Label = (props: ILabelProps) => {
       type="text"
       defaultValue={props.text}
       onBlur={(e) => {
-        console.log('%c onBlur Triggered! ', 'background: #222; color: #bada55')
+        // console.log('%c onBlur Triggered! ', 'background: #222; color: #bada55')
         const value = e.currentTarget.value.trim();
         if (value.length > 0) {
           props.setText(value);
@@ -68,19 +68,19 @@ const Label = (props: ILabelProps) => {
         props.onSubmit(e.currentTarget);
       }}
       onKeyDown={(e) => {
-        console.log('%c onKeyDown Triggered! ', 'background: #222; color: #3954a5')
+        // console.log('%c onKeyDown Triggered! ', 'background: #222; color: #3954a5')
         const value = e.currentTarget.value.trim();
         if (e.key === 'Enter' && value.length > 0) {
-          console.log('%c onKeyDown Triggered! [Enter] ', 'background: #222; color: #d4af37')
+          // console.log('%c onKeyDown Triggered! [Enter] ', 'background: #222; color: #d4af37')
           props.setText(value);
           props.onSubmit(e.currentTarget);
         } else if (e.key === 'Escape') {
-          console.log('%c onKeyDown Triggered! [Escape] ', 'background: #222; color: #d9ead3')
+          // console.log('%c onKeyDown Triggered! [Escape] ', 'background: #222; color: #d9ead3')
           props.onSubmit(e.currentTarget); // cancel with escape
         }
       }}
       onFocus={(e) => {
-        console.log('%c onFocus Triggered! ', 'background: #222; color: #c7370f')
+        // console.log('%c onFocus Triggered! ', 'background: #222; color: #c7370f')
         e.target.select()
       }}
       // TODO: Visualizing errors...
@@ -304,13 +304,13 @@ const TagItem = observer((props: ITagItemProps) => {
     (event: React.MouseEvent) => {
       event.stopPropagation();
       select(event, nodeData);
-      console.log('%c handleSelect Triggered! ', 'background: #e24908; color: #fff0f5')
+      // console.log('%c handleSelect Triggered! ', 'background: #e24908; color: #fff0f5')
     },
     [nodeData, select],
   );
 
   const handleSelectWhileEditing = () => {
-    console.log('%c handleSelect While Editing Triggered! ', 'background: #e8527c; color: #fff0f5')
+    // console.log('%c handleSelect While Editing Triggered! ', 'background: #e8527c; color: #fff0f5')
   }
 
   const handleQuickQuery = useCallback(
@@ -513,7 +513,7 @@ const TagsTree = observer(() => {
   });
 
   const submit = useRef((target: EventTarget & HTMLInputElement) => {
-    console.log('%c submit Triggered! ', 'background: #222; color: #ffffff')
+    // console.log('%c submit Triggered! ', 'background: #222; color: #ffffff')
     target.focus();
     dispatch(Factory.disableEditing());
     target.setSelectionRange(0, 0);
