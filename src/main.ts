@@ -70,7 +70,7 @@ function initialize() {
       preferences = fse.readJSONSync(preferencesFilePath);
     } catch (e) {
       // Auto update enabled by default
-      preferences = { checkForUpdatesOnStartup: true };
+      preferences = { checkForUpdatesOnStartup: false };
     }
     if (preferences.checkForUpdatesOnStartup) {
       autoUpdater.checkForUpdates();

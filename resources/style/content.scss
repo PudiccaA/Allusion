@@ -3,7 +3,7 @@
   width: 100%;
   height: 100%;
   overflow: hidden;
-  
+
   &.unmaximized {
     // Ensure scrollbar isn't right up to the window edge when window is not fully maximized
     // the cursor events of the window edge interfere with the narrow scrollbar
@@ -27,7 +27,6 @@
 // If selected, and any other selected image is a drop target: normal yellow border
 // (as an indication that dropping a tag will apply it to all selected files)
 #gallery-content[data-selected-file-dropping='true'] {
-
   .masonry {
     [aria-selected='true'] > .thumbnail {
       background-color: var(--accent-color-yellow);
@@ -442,6 +441,7 @@
   overflow-x: hidden;
   height: 100%;
   padding: 8px; // Note: keep in sync with MasonryRenderer PADDING
+  direction: rtl;
 
   [data-masonrycell] {
     contain: strict;
