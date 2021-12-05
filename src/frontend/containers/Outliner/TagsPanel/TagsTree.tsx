@@ -329,6 +329,10 @@ const TagItem = observer((props: ITagItemProps) => {
     nodeData.id,
   ]);
 
+  const handleSelectWhileEditing = () => {
+    // console.log('%c handleSelect While Editing Triggered! ', 'background: #e8527c; color: #fff0f5')
+  }
+
   useEffect(
     () =>
       TagsTreeItemRevealer.instance.initialize(
@@ -347,7 +351,8 @@ const TagItem = observer((props: ITagItemProps) => {
       onDragLeave={handleDragLeave}
       onDrop={handleDrop}
       onContextMenu={handleContextMenu}
-      onClick={handleSelect}
+      // onClick={handleSelect}
+      onClick={isEditing ? handleSelectWhileEditing : handleSelect}
       onDoubleClick={handleRename}
     >
       <span style={{ color: nodeData.viewColor }}>
