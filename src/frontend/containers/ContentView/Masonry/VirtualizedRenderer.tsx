@@ -155,7 +155,7 @@ const VirtualizedRenderer = observer(
       // One div as the scrollable viewport
       <div className={className} onScroll={handleScroll} ref={wrapperRef}>
         {/* One div for the content */}
-        <div style={{ width: containerWidth, height: containerHeight }}>
+        <div style={{ width: containerWidth, height: containerHeight, direction:"ltr", paddingLeft: "1rem" }}>
           {images.slice(startRenderIndex, endRenderIndex + 1).map((im, index) => {
             const fileListIndex = startRenderIndex + index;
             const transform = layout.getTransform(fileListIndex);
