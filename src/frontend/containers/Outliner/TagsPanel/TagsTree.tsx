@@ -48,14 +48,19 @@ interface ILabelProps {
   tooltip?: string;
 }
 
-const Label = (props: ILabelProps) =>
+const Label = (props: ILabelProps) => {
+  console.log('%c isEditing?: ', 'background: #0d3740; color: #ffd700', props.isEditing);
+
+  return (
   props.isEditing ? (
     <input
       className="input"
+      style={{borderStyle: "solid", borderWidth: "2px", borderColor: "green"}}
       autoFocus
       type="text"
       defaultValue={props.text}
       onBlur={(e) => {
+        console.log('%c onBlur Triggered! ', 'background: #222; color: #bada55')
         const value = e.currentTarget.value.trim();
         if (value.length > 0) {
           props.setText(value);
@@ -63,23 +68,30 @@ const Label = (props: ILabelProps) =>
         props.onSubmit(e.currentTarget);
       }}
       onKeyDown={(e) => {
+        console.log('%c onKeyDown Triggered! ', 'background: #222; color: #3954a5')
         const value = e.currentTarget.value.trim();
         if (e.key === 'Enter' && value.length > 0) {
+          console.log('%c onKeyDown Triggered! [Enter] ', 'background: #222; color: #d4af37')
           props.setText(value);
           props.onSubmit(e.currentTarget);
         } else if (e.key === 'Escape') {
+          console.log('%c onKeyDown Triggered! [Escape] ', 'background: #222; color: #d9ead3')
           props.onSubmit(e.currentTarget); // cancel with escape
         }
       }}
-      onFocus={(e) => e.target.select()}
+      onFocus={(e) => {
+        console.log('%c onFocus Triggered! ', 'background: #222; color: #c7370f')
+        e.target.select()
+      }}
       // TODO: Visualizing errors...
       // Only show red outline when input field is in focus and text is invalid
     />
   ) : (
-    <div className="label-text" data-tooltip={props.tooltip}>
+    <div className="label-text" data-tooltip={props.tooltip} style={{borderStyle: "solid", borderWidth: "2px", borderColor: "red"}}>
       {props.text}
     </div>
-  );
+  ));
+}
 
 interface ITagItemProps {
   showContextMenu: (x: number, y: number, menu: JSX.Element) => void;
@@ -292,9 +304,14 @@ const TagItem = observer((props: ITagItemProps) => {
     (event: React.MouseEvent) => {
       event.stopPropagation();
       select(event, nodeData);
+      console.log('%c handleSelect Triggered! ', 'background: #e24908; color: #fff0f5')
     },
     [nodeData, select],
   );
+
+  const handleSelectWhileEditing = () => {
+    console.log('%c handleSelect While Editing Triggered! ', 'background: #e8527c; color: #fff0f5')
+  }
 
   const handleQuickQuery = useCallback(
     (event: React.MouseEvent) => {
@@ -347,10 +364,12 @@ const TagItem = observer((props: ITagItemProps) => {
       onDragLeave={handleDragLeave}
       onDrop={handleDrop}
       onContextMenu={handleContextMenu}
-      onClick={handleSelect}
+      onClick={isEditing ? handleSelectWhileEditing : handleSelect}
+      // onClick={handleSelect}
       onDoubleClick={handleRename}
+      style={{borderStyle: "solid", borderWidth: "2px", borderColor: "yellow"}}
     >
-      <span style={{ color: nodeData.viewColor }}>
+      <span style={{ color: nodeData.viewColor, borderStyle: "solid", borderWidth: "2px", borderColor: "purple" }}>
         {nodeData.isHidden ? IconSet.HIDDEN : IconSet.TAG}
       </span>
       <Label
@@ -381,18 +400,24 @@ const TagItemLabel: TreeLabel = ({
   nodeData: ClientTag;
   treeData: ITreeData;
   pos: number;
-}) => (
-  <TagItem
-    showContextMenu={treeData.showContextMenu}
-    nodeData={nodeData}
-    dispatch={treeData.dispatch}
-    expansion={treeData.state.expansion}
-    isEditing={treeData.state.editableNode === nodeData.id}
-    submit={treeData.submit}
-    pos={pos}
-    select={treeData.select}
-  />
-);
+}) => {
+  // console.log('%c editableNode: ', 'background: #0d3740; color: #47fed3', treeData.state.editableNode);
+  // console.log('%c nodeData id: ', 'background: #0d3740; color: #47fed3', nodeData.id);
+  // console.log('%c editableNode === nodeData.id?: ', 'background: #0d3740; color: #47fed3', treeData.state.editableNode === nodeData.id);
+  
+  return (
+    <TagItem
+      showContextMenu={treeData.showContextMenu}
+      nodeData={nodeData}
+      dispatch={treeData.dispatch}
+      expansion={treeData.state.expansion}
+      isEditing={treeData.state.editableNode === nodeData.id}
+      submit={treeData.submit}
+      pos={pos}
+      select={treeData.select}
+    />
+  )
+};
 
 const isSelected = (nodeData: ClientTag): boolean => nodeData.isSelected;
 
@@ -488,6 +513,7 @@ const TagsTree = observer(() => {
   });
 
   const submit = useRef((target: EventTarget & HTMLInputElement) => {
+    console.log('%c submit Triggered! ', 'background: #222; color: #ffffff')
     target.focus();
     dispatch(Factory.disableEditing());
     target.setSelectionRange(0, 0);
@@ -602,7 +628,7 @@ const TagsTree = observer(() => {
   });
 
   return (
-    <div onKeyDown={handleKeyDown}>
+    <div onKeyDown={handleKeyDown} style={{borderStyle: "solid", borderWidth: "2px", borderColor: "cyan"}}>
       <header
         onDragOver={handleDragOverAndLeave}
         onDragLeave={handleDragOverAndLeave}
