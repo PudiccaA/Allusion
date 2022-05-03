@@ -20,15 +20,10 @@ import RootStore from './frontend/stores/RootStore';
 import App from './frontend/App';
 import PreviewApp from './frontend/Preview';
 import Overlay from './frontend/Overlay';
-import { promiseRetry } from './frontend/utils';
+import { IS_PREVIEW_WINDOW, WINDOW_STORAGE_KEY } from 'common/window';
+import { promiseRetry } from '../common/timeout';
 
-// Window State
-export const WINDOW_STORAGE_KEY = 'Allusion_Window';
-
-export const PREVIEW_WINDOW_BASENAME = 'Allusion Quick View';
-
-const params = new URLSearchParams(window.location.search.slice(1));
-export const IS_PREVIEW_WINDOW = params.get('preview') === 'true';
+const PREVIEW_WINDOW_BASENAME = 'Allusion Quick View';
 
 // Initialize the backend for the App, that serves as an API to the front-end
 const backend = new Backend();
@@ -44,18 +39,30 @@ backend
 
 if (IS_PREVIEW_WINDOW) {
   RendererMessenger.onReceivePreviewFiles(
-    ({ ids, thumbnailDirectory, viewMethod, activeImgId }) => {
+    async ({ ids, thumbnailDirectory, viewMethod, activeImgId }) => {
       rootStore.uiStore.setThumbnailDirectory(thumbnailDirectory);
       rootStore.uiStore.setMethod(viewMethod);
       rootStore.uiStore.enableSlideMode();
 
       runInAction(() => {
-        if (rootStore.uiStore.isInspectorOpen) rootStore.uiStore.toggleInspector();
+        if (rootStore.uiStore.isInspectorOpen) {
+          rootStore.uiStore.toggleInspector();
+        }
       });
 
-      rootStore.fileStore.fetchFilesByIDs(ids).then(() => {
-        rootStore.uiStore.setFirstItem((activeImgId && ids.indexOf(activeImgId)) || 0);
-      });
+      const files = await backend.fetchFilesByID(ids);
+
+      // If a file has a location we don't know about (e.g. when a new location was added to the main window),
+      // re-fetch the locations in the preview window
+      const hasNewLocation = runInAction(() =>
+        files.some((f) => !rootStore.locationStore.locationList.find((l) => l.id === f.id)),
+      );
+      if (hasNewLocation) {
+        await rootStore.locationStore.init();
+      }
+
+      await rootStore.fileStore.updateFromBackend(files);
+      rootStore.uiStore.setFirstItem((activeImgId && ids.indexOf(activeImgId)) || 0);
     },
   );
 
@@ -88,18 +95,13 @@ if (IS_PREVIEW_WINDOW) {
     const index = object.get();
     if (!isNaN(index) && index >= 0 && index < rootStore.fileStore.fileList.length) {
       const file = rootStore.fileStore.fileList[index];
-      document.title = `${file?.absolutePath || '?'} • ${PREVIEW_WINDOW_BASENAME}`;
+      document.title = `${file.absolutePath || '?'} • ${PREVIEW_WINDOW_BASENAME}`;
     }
   });
 } else {
   RendererMessenger.onClosedPreviewWindow(() => {
     rootStore.uiStore.closePreviewWindow();
   });
-
-  // Load persistent preferences
-  rootStore.uiStore.recoverPersistentPreferences();
-  rootStore.fileStore.recoverPersistentPreferences();
-
   // Recover global preferences
   try {
     const window_preferences = localStorage.getItem(WINDOW_STORAGE_KEY);

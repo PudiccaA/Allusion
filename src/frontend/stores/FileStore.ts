@@ -1,8 +1,8 @@
 import fse from 'fs-extra';
 import { action, computed, makeObservable, observable, observe, runInAction } from 'mobx';
 import Backend from 'src/backend/Backend';
-import { FileOrder } from 'src/backend/DBRepository';
-import { ClientFile, IFile, IMG_EXTENSIONS_TYPE } from 'src/entities/File';
+import { SearchOrder, OrderDirection } from 'src/backend/DBRepository';
+import { ClientFile, IFile, IMG_EXTENSIONS_TYPE, mergeMovedFile } from 'src/entities/File';
 import { ID } from 'src/entities/ID';
 import { ClientLocation } from 'src/entities/Location';
 import {
@@ -12,13 +12,17 @@ import {
 } from 'src/entities/SearchCriteria';
 import { ClientTag } from 'src/entities/Tag';
 import { AppToaster } from '../components/Toaster';
-import { debounce, getThumbnailPath, promiseAllLimit } from '../utils';
+import { debounce } from 'common/timeout';
+import { getThumbnailPath } from 'common/fs';
+import { promiseAllLimit } from 'common/promise';
 import RootStore from './RootStore';
 
 const FILE_STORAGE_KEY = 'Allusion_File';
 
 /** These fields are stored and recovered when the application opens up */
-const PersistentPreferenceFields: Array<keyof FileStore> = ['fileOrder', 'orderBy'];
+const PersistentPreferenceFields: Array<keyof FileStore> = ['orderDirection', 'orderBy'];
+
+export type FileOrder = SearchOrder<IFile>;
 
 const enum Content {
   All,
@@ -40,15 +44,18 @@ class FileStore {
   /** A map of file ID to its index in the file list, for quick lookups by ID */
   private readonly index = new Map<ID, number>();
 
+  private filesToSave: Map<ID, IFile> = new Map();
+
   /** The origin of the current files that are shown */
   @observable private content: Content = Content.All;
-  @observable fileOrder: FileOrder = FileOrder.Desc;
-  @observable orderBy: keyof IFile = 'dateAdded';
+  @observable orderDirection: OrderDirection = OrderDirection.Desc;
+  @observable orderBy: FileOrder = 'dateAdded';
   @observable numTotalFiles = 0;
   @observable numUntaggedFiles = 0;
   @observable numMissingFiles = 0;
 
   debouncedRefetch: () => void;
+  debouncedSaveFilesToSave: () => Promise<void>;
 
   constructor(backend: Backend, rootStore: RootStore) {
     this.backend = backend;
@@ -58,6 +65,7 @@ class FileStore {
     // Store preferences immediately when anything is changed
     const debouncedPersist = debounce(this.storePersistentPreferences, 200).bind(this);
     this.debouncedRefetch = debounce(this.refetch, 200).bind(this);
+    this.debouncedSaveFilesToSave = debounce(this.saveFilesToSave, 100).bind(this);
     PersistentPreferenceFields.forEach((f) => observe(this, f, debouncedPersist));
   }
 
@@ -134,7 +142,10 @@ class FileStore {
       const tagFilePairs = runInAction(() =>
         this.fileList.map((f) => ({
           absolutePath: f.absolutePath,
-          tagHierarchy: Array.from(f.tags).map(action((t) => t.treePath.map((t) => t.name))),
+          tagHierarchy: Array.from(
+            f.tags,
+            action((t) => t.path),
+          ),
         })),
       );
       let lastToastVal = '0';
@@ -193,29 +204,37 @@ class FileStore {
     return this.content === Content.Query;
   }
 
-  @action.bound switchFileOrder() {
-    this.setFileOrder(this.fileOrder === FileOrder.Desc ? FileOrder.Asc : FileOrder.Desc);
+  @action.bound switchOrderDirection() {
+    this.setOrderDirection(
+      this.orderDirection === OrderDirection.Desc ? OrderDirection.Asc : OrderDirection.Desc,
+    );
     this.refetch();
   }
 
-  @action.bound orderFilesBy(prop: keyof IFile = 'dateAdded') {
+  @action.bound orderFilesBy(prop: FileOrder = 'dateAdded') {
     this.setOrderBy(prop);
     this.refetch();
   }
 
   @action.bound setContentQuery() {
     this.content = Content.Query;
-    if (this.rootStore.uiStore.isSlideMode) this.rootStore.uiStore.disableSlideMode();
+    if (this.rootStore.uiStore.isSlideMode) {
+      this.rootStore.uiStore.disableSlideMode();
+    }
   }
 
   @action.bound setContentAll() {
     this.content = Content.All;
-    if (this.rootStore.uiStore.isSlideMode) this.rootStore.uiStore.disableSlideMode();
+    if (this.rootStore.uiStore.isSlideMode) {
+      this.rootStore.uiStore.disableSlideMode();
+    }
   }
 
   @action.bound setContentUntagged() {
     this.content = Content.Untagged;
-    if (this.rootStore.uiStore.isSlideMode) this.rootStore.uiStore.disableSlideMode();
+    if (this.rootStore.uiStore.isSlideMode) {
+      this.rootStore.uiStore.disableSlideMode();
+    }
   }
 
   /**
@@ -235,6 +254,29 @@ class FileStore {
     }
   }
 
+  /** Replaces a file's data when it is moved or renamed */
+  @action.bound replaceMovedFile(file: ClientFile, newData: IFile) {
+    const index = this.index.get(file.id);
+    if (index !== undefined) {
+      file.dispose();
+
+      const newIFile = mergeMovedFile(file.serialize(), newData);
+
+      // Move thumbnail
+      const { thumbnailDirectory } = this.rootStore.uiStore; // TODO: make a config store for this?
+      const oldThumbnailPath = file.thumbnailPath.replace('?v=1', '');
+      const newThumbPath = getThumbnailPath(newData.absolutePath, thumbnailDirectory);
+      // eslint-disable-next-line @typescript-eslint/no-empty-function
+      fse.move(oldThumbnailPath, newThumbPath).catch(() => {});
+
+      const newClientFile = new ClientFile(this, newIFile);
+      newClientFile.thumbnailPath = newThumbPath;
+      this.fileList[index] = newClientFile;
+      this.save(newClientFile.serialize());
+    }
+  }
+
+  /** Removes a file from the internal state of this store and the DB. Does not remove from disk. */
   @action async deleteFiles(files: ClientFile[]): Promise<void> {
     if (files.length === 0) {
       return;
@@ -247,10 +289,12 @@ class FileStore {
 
       // Remove files from stores
       for (const file of files) {
+        file.dispose();
         this.rootStore.uiStore.deselectFile(file);
         this.removeThumbnail(file.absolutePath);
       }
-      this.refetch();
+      this.fileListLastModified = new Date();
+      return this.refetch();
     } catch (err) {
       console.error('Could not remove files', err);
     }
@@ -259,7 +303,7 @@ class FileStore {
   @action async deleteFilesByExtension(ext: IMG_EXTENSIONS_TYPE): Promise<void> {
     try {
       const crit = new ClientStringSearchCriteria('extension', ext, 'equals');
-      const files = await this.backend.searchFiles(crit.serialize(), 'id', FileOrder.Asc);
+      const files = await this.backend.searchFiles(crit.serialize(), 'id', OrderDirection.Asc);
       console.log('Files to delete', ext, files);
       await this.backend.removeFiles(files.map((f) => f.id));
 
@@ -271,22 +315,22 @@ class FileStore {
     }
   }
 
-  @action.bound refetch() {
+  @action.bound async refetch() {
     if (this.showsAllContent) {
-      this.fetchAllFiles();
+      return this.fetchAllFiles();
     } else if (this.showsUntaggedContent) {
-      this.fetchUntaggedFiles();
+      return this.fetchUntaggedFiles();
     } else if (this.showsQueryContent) {
-      this.fetchFilesByQuery();
+      return this.fetchFilesByQuery();
     } else if (this.showsMissingContent) {
-      this.fetchMissingFiles();
+      return this.fetchMissingFiles();
     }
   }
 
   @action.bound async fetchAllFiles() {
     try {
       this.rootStore.uiStore.clearSearchCriteriaList();
-      const fetchedFiles = await this.backend.fetchFiles(this.orderBy, this.fileOrder);
+      const fetchedFiles = await this.backend.fetchFiles(this.orderBy, this.orderDirection);
       this.setContentAll();
       return this.updateFromBackend(fetchedFiles);
     } catch (err) {
@@ -298,12 +342,12 @@ class FileStore {
     try {
       const { uiStore } = this.rootStore;
       uiStore.clearSearchCriteriaList();
-      const criteria = new ClientTagSearchCriteria(this.rootStore.tagStore, 'tags');
+      const criteria = new ClientTagSearchCriteria('tags');
       uiStore.searchCriteriaList.push(criteria);
       const fetchedFiles = await this.backend.searchFiles(
-        criteria.serialize(),
+        criteria.serialize(this.rootStore),
         this.orderBy,
-        this.fileOrder,
+        this.orderDirection,
         uiStore.searchMatchAny,
       );
       this.setContentUntagged();
@@ -317,7 +361,7 @@ class FileStore {
     try {
       const {
         orderBy,
-        fileOrder,
+        orderDirection,
         rootStore: { uiStore },
       } = this;
 
@@ -326,7 +370,7 @@ class FileStore {
 
       // Fetch all files, then check their existence and only show the missing ones
       // Similar to {@link updateFromBackend}, but the existence check needs to be awaited before we can show the images
-      const backendFiles = await this.backend.fetchFiles(orderBy, fileOrder);
+      const backendFiles = await this.backend.fetchFiles(orderBy, orderDirection);
 
       // For every new file coming in, either re-use the existing client file if it exists,
       // or construct a new client file
@@ -378,7 +422,9 @@ class FileStore {
 
   @action.bound async fetchFilesByQuery() {
     const { uiStore } = this.rootStore;
-    const criteria = this.rootStore.uiStore.searchCriteriaList.map((c) => c.serialize());
+    const criteria = this.rootStore.uiStore.searchCriteriaList.map((c) =>
+      c.serialize(this.rootStore),
+    );
     if (criteria.length === 0) {
       return this.fetchAllFiles();
     }
@@ -386,7 +432,7 @@ class FileStore {
       const fetchedFiles = await this.backend.searchFiles(
         criteria as [SearchCriteria<IFile>],
         this.orderBy,
-        this.fileOrder,
+        this.orderDirection,
         uiStore.searchMatchAny,
       );
       this.setContentQuery();
@@ -454,7 +500,17 @@ class FileStore {
 
   save(file: IFile) {
     file.dateModified = new Date();
-    this.backend.saveFile(file);
+
+    // Save files in bulk so saving many files at once is faster.
+    // Each file will call this save() method individually after detecting a change on its observable fields,
+    // these can be batched by collecting the changes and debouncing the save operation
+    this.filesToSave.set(file.id, file);
+    this.debouncedSaveFilesToSave();
+  }
+
+  private async saveFilesToSave() {
+    await this.backend.saveFiles(Array.from(this.filesToSave.values()));
+    this.filesToSave.clear();
   }
 
   @action recoverPersistentPreferences() {
@@ -462,10 +518,10 @@ class FileStore {
     if (prefsString) {
       try {
         const prefs = JSON.parse(prefsString);
-        this.setFileOrder(prefs.fileOrder);
+        this.setOrderDirection(prefs.orderDirection || prefs.fileOrder); // orderDirection used to be called fileOrder, needed for backwards compatibility
         this.setOrderBy(prefs.orderBy);
       } catch (e) {
-        console.log('Cannot parse persistent preferences:', FILE_STORAGE_KEY, e);
+        console.error('Cannot parse persistent preferences:', FILE_STORAGE_KEY, e);
       }
     }
   }
@@ -476,6 +532,10 @@ class FileStore {
       prefs[field] = this[field];
     }
     localStorage.setItem(FILE_STORAGE_KEY, JSON.stringify(prefs));
+  }
+
+  clearPersistentPreferences() {
+    localStorage.removeItem(FILE_STORAGE_KEY);
   }
 
   @action private async removeThumbnail(path: string) {
@@ -490,7 +550,7 @@ class FileStore {
     }
   }
 
-  @action private async updateFromBackend(backendFiles: IFile[]): Promise<void> {
+  @action async updateFromBackend(backendFiles: IFile[]): Promise<void> {
     if (backendFiles.length === 0) {
       this.rootStore.uiStore.clearFileSelection();
       this.fileListLastModified = new Date();
@@ -625,7 +685,7 @@ class FileStore {
 
   /** Initializes the total and untagged file counters by querying the database with count operations */
   async refetchFileCounts() {
-    const noTagsCriteria = new ClientTagSearchCriteria(this.rootStore.tagStore, 'tags').serialize();
+    const noTagsCriteria = new ClientTagSearchCriteria('tags').serialize(this.rootStore);
     const numUntaggedFiles = await this.backend.countFiles(noTagsCriteria);
     const numTotalFiles = await this.backend.countFiles();
     runInAction(() => {
@@ -634,11 +694,11 @@ class FileStore {
     });
   }
 
-  @action private setFileOrder(order: FileOrder = FileOrder.Desc) {
-    this.fileOrder = order;
+  @action private setOrderDirection(order: OrderDirection) {
+    this.orderDirection = order;
   }
 
-  @action private setOrderBy(prop: keyof IFile = 'dateAdded') {
+  @action private setOrderBy(prop: FileOrder = 'dateAdded') {
     this.orderBy = prop;
   }
 

@@ -1,4 +1,4 @@
-import { configure } from 'mobx';
+import { configure, runInAction } from 'mobx';
 
 import Backend from 'src/backend/Backend';
 
@@ -6,10 +6,11 @@ import FileStore from './FileStore';
 import TagStore from './TagStore';
 import UiStore from './UiStore';
 import LocationStore from './LocationStore';
-import ExifIO from 'src/backend/ExifIO';
+import ExifIO from 'common/ExifIO';
 import ImageLoader from '../image/ImageLoader';
 
 import { RendererMessenger } from 'src/Messaging';
+import SearchStore from './SearchStore';
 
 // This will throw exceptions whenver we try to modify the state directly without an action
 // Actions will batch state modifications -> better for performance
@@ -31,6 +32,7 @@ class RootStore {
   readonly fileStore: FileStore;
   readonly locationStore: LocationStore;
   readonly uiStore: UiStore;
+  readonly searchStore: SearchStore;
   readonly exifTool: ExifIO;
   readonly imageLoader: ImageLoader;
   readonly clearDatabase: () => Promise<void>;
@@ -40,13 +42,16 @@ class RootStore {
     this.fileStore = new FileStore(backend, this);
     this.locationStore = new LocationStore(backend, this);
     this.uiStore = new UiStore(this);
-    this.exifTool = new ExifIO();
+    this.searchStore = new SearchStore(backend, this);
+    this.exifTool = new ExifIO(localStorage.getItem('hierarchical-separator') || undefined);
     this.imageLoader = new ImageLoader(this.exifTool);
 
     // SAFETY: The backend instance has the same lifetime as the RootStore.
     this.clearDatabase = async () => {
       await backend.clearDatabase();
       RendererMessenger.clearDatabase();
+      this.uiStore.clearPersistentPreferences();
+      this.fileStore.clearPersistentPreferences();
     };
   }
 
@@ -58,18 +63,50 @@ class RootStore {
     // to tag entities.
     await this.tagStore.init();
 
-    await Promise.all([this.exifTool.initialize(), this.imageLoader.init()]);
+    await Promise.all([
+      this.exifTool.initialize(),
+      this.imageLoader.init(),
+      this.searchStore.init(),
+    ]);
 
     // The preview window is opened while the locations are already watched. The
     // files are fetched based on the file selection.
     if (!isPreviewWindow) {
+      // Then, restore preferences, which affects how the file store initializes
+      // It depends on tag store being intialized for reconstructing search criteria
+      this.uiStore.recoverPersistentPreferences();
+      this.fileStore.recoverPersistentPreferences();
+      const isSlideMode = runInAction(() => this.uiStore.isSlideMode);
+
+      const numCriterias = runInAction(() => this.uiStore.searchCriteriaList.length);
+
+      // There may already be a search already present, recovered from a previous session
+      const fileStoreInit =
+        numCriterias === 0
+          ? this.fileStore.fetchAllFiles
+          : () => {
+              // When searching by criteria, the file counts won't be set (only when fetching all files),
+              // so fetch them manually
+              this.fileStore.refetchFileCounts().catch(console.error);
+              return this.fileStore.fetchFilesByQuery();
+            };
+
       // Load the files already in the database so user instantly sees their images
-      this.fileStore
-        .fetchAllFiles()
-        .then(() => this.tagStore.initializeFileCounts(this.fileStore.fileList));
+      fileStoreInit().then(() => {
+        this.tagStore.initializeFileCounts(this.fileStore.fileList);
+
+        // If slide mode was recovered from previous session, it's disabled by setContentQuery :/
+        // hacky workaround
+        if (isSlideMode) {
+          this.uiStore.enableSlideMode();
+        }
+      });
+
       // Then, look for any new or removed images, and refetch if necessary
       this.locationStore.watchLocations().then((foundNewFiles) => {
-        if (foundNewFiles) this.fileStore.refetch();
+        if (foundNewFiles) {
+          this.fileStore.refetch();
+        }
       });
     }
 

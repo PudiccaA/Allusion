@@ -4,11 +4,11 @@ import {
   Menu,
   MenuRadioGroup,
   MenuSubItem,
-  IMenu,
+  MenuProps,
   MenuChild,
   MenuChildren,
   IMenuRadioGroup,
-  IMenuSubItem,
+  MenuSubItemProps,
 } from './menus';
 import {
   MenuCheckboxItem,
@@ -18,9 +18,10 @@ import {
   IMenuItem,
   IMenuCheckboxItem,
   IMenuRadioItem,
-  IMenuItemLink,
+  MenuItemLinkProps,
 } from './menu-items';
-import { ContextMenu } from './ContextMenu';
+import { ContextMenuLayer, useContextMenu } from './ContextMenu';
+import { MenuButton } from './MenuButton';
 
 export {
   Menu,
@@ -30,23 +31,25 @@ export {
   MenuItem,
   MenuRadioItem,
   MenuSubItem,
-  IMenu,
+  MenuProps,
   MenuChild,
   MenuChildren,
   IMenuRadioGroup,
-  IMenuSubItem,
+  MenuSubItemProps,
   IMenuItem,
   IMenuCheckboxItem,
   IMenuRadioItem,
-  IMenuItemLink,
+  MenuItemLinkProps,
 };
 
-import {
-  Toolbar,
+import { Toolbar, ToolbarButton, ToolbarSegment, ToolbarSegmentButton } from '../Toolbar';
+
+export {
+  ContextMenuLayer,
+  useContextMenu,
   ToolbarButton,
   MenuButton,
   ToolbarSegment,
   ToolbarSegmentButton,
-} from '../Toolbar';
-
-export { ContextMenu, ToolbarButton, MenuButton, ToolbarSegment, ToolbarSegmentButton, Toolbar };
+  Toolbar,
+};

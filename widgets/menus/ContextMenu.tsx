@@ -1,63 +1,74 @@
-import React, { useLayoutEffect, useRef, useState } from 'react';
-import { RawPopover } from '../popovers/RawPopover';
-import { IMenu } from './menus';
+import React, { useContext, useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { usePopover } from '../popovers/usePopover';
+import { Menu, MenuProps } from './menus';
 
-export interface IContextMenu {
+export const ContextMenuLayer = ({ children }: { children: React.ReactNode }) => {
+  const [state, setState] = useState({ isOpen: false, x: 0, y: 0, menu: <Menu>{[]}</Menu> });
+  const { show, hide } = useRef({
+    show: (x: number, y: number, menu: React.ReactElement<MenuProps>) => {
+      setState({ isOpen: true, x, y, menu });
+    },
+    hide: () => {
+      setState({ isOpen: false, x: 0, y: 0, menu: <Menu>{[]}</Menu> });
+    },
+  }).current;
+
+  return (
+    <ContextMenuProvider value={show}>
+      {children}
+      <ContextMenu isOpen={state.isOpen} x={state.x} y={state.y} close={hide}>
+        {state.menu}
+      </ContextMenu>
+    </ContextMenuProvider>
+  );
+};
+
+export const useContextMenu = () => {
+  return useContext(ContextMenuContext);
+};
+
+type ContextMenuActions = (x: number, y: number, menu: React.ReactElement<MenuProps>) => void;
+
+// eslint-disable-next-line @typescript-eslint/no-empty-function
+const ContextMenuContext = React.createContext<ContextMenuActions>(() => {});
+
+const ContextMenuProvider = ContextMenuContext.Provider;
+
+interface ContextMenuProps {
   isOpen: boolean;
   x: number;
   y: number;
-  children?: React.ReactElement<IMenu> | React.ReactFragment;
+  children: React.ReactElement<MenuProps>;
   close: () => void;
-  usePortal?: boolean;
 }
 
 /**
  * The classic desktop context menu
- *
- * Unlike other implementations there is no single context menu added through a
- * React portal. This component is driven entirely by the state of your app.
- *
- * This might seem inconvenient but the upside is that styling has not to be
- * re-applied to a portal and that multiple context menus can exist without
- * harming performance. In short this component is more inconvenient but allows
- * for better composability.
- *
- * Since it is really annoying to always write out the same lines of code, the
- * `useContextMenu` hook can be used to create all the necessary state and
- * callbacks which can be used to set the state from deep within a tree.
  */
-export const ContextMenu = ({ isOpen, x, y, children, close, usePortal = true }: IContextMenu) => {
+const ContextMenu = ({ isOpen, x, y, children, close }: ContextMenuProps) => {
   const container = useRef<HTMLDivElement>(null);
-  const boundingRect = useRef<DOMRect>(
-    DOMRect.fromRect({
-      width: 0,
-      height: 0,
-      x,
-      y,
-    }),
-  );
-  const [virtualElement, setVirtualElement] = useState({
-    getBoundingClientRect: () => boundingRect.current,
-  });
+  const boundingRect = useRef(new DOMRect());
+  const { style, reference, floating, update } = usePopover('right-start');
+
+  useEffect(() => {
+    floating(container.current);
+    // Capture only the DOMRect and not the React MutableRefObject
+    const boundingRectRef = boundingRect.current;
+    reference({ getBoundingClientRect: () => boundingRectRef });
+  }, [floating, reference]);
 
   useLayoutEffect(() => {
-    // layoutEffect to avoid the flicker where the placement is wrong at the start
     if (container.current && isOpen) {
       // Focus container so the keydown event can be handled even without a mouse.
       container.current.focus();
 
       // Update bounding rect
-      const rect = DOMRect.fromRect({
-        width: boundingRect.current.width,
-        height: boundingRect.current.height,
-        x,
-        y,
-      });
-      setVirtualElement({
-        getBoundingClientRect: () => rect,
-      });
+      // Do not replace the DOMRect object reference!
+      boundingRect.current.x = x;
+      boundingRect.current.y = y;
+      update();
     }
-  }, [isOpen, x, y]);
+  }, [isOpen, update, x, y]);
 
   // Close upon executing a command from a menu item
   const handleClick = (e: React.MouseEvent) => {
@@ -96,21 +107,20 @@ export const ContextMenu = ({ isOpen, x, y, children, close, usePortal = true }:
   };
 
   return (
-    <RawPopover
-      anchorElement={virtualElement}
-      popoverRef={container}
-      isOpen={isOpen}
+    <div
+      ref={container}
+      style={style}
+      data-popover
+      data-open={isOpen}
       data-contextmenu
-      placement="right-start"
       tabIndex={-1}
       onBlur={handleBlur}
       onKeyDown={handleKeyDown}
       onClick={handleClick}
       onMouseOver={handleMouseOver}
-      portalId={usePortal ? 'context-menu-portal' : undefined}
     >
-      {isOpen ? children : null}
-    </RawPopover>
+      {children}
+    </div>
   );
 };
 

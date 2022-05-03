@@ -1,17 +1,16 @@
+import { chromeExtensionUrl } from 'common/config';
+import { getFilenameFriendlyFormattedDateTime } from 'common/fmt';
+import { getThumbnailPath, isDirEmpty } from 'common/fs';
+import { WINDOW_STORAGE_KEY } from 'common/window';
 import { shell } from 'electron';
 import { runInAction } from 'mobx';
 import { observer } from 'mobx-react-lite';
 import SysPath from 'path';
 import React, { ReactNode, useCallback, useEffect, useState } from 'react';
-import {
-  chromeExtensionUrl,
-  getDefaultBackupDirectory,
-  getDefaultThumbnailDirectory,
-} from 'src/config';
 import { IMG_EXTENSIONS, IMG_EXTENSIONS_TYPE } from 'src/entities/File';
 import { AppToaster } from 'src/frontend/components/Toaster';
+import useCustomTheme from 'src/frontend/hooks/useCustomTheme';
 import { RendererMessenger } from 'src/Messaging';
-import { WINDOW_STORAGE_KEY } from 'src/renderer';
 import {
   Button,
   ButtonGroup,
@@ -27,7 +26,6 @@ import { Alert, DialogButton } from 'widgets/popovers';
 import PopupWindow from '../../components/PopupWindow';
 import { useStore } from '../../contexts/StoreContext';
 import { moveThumbnailDir } from '../../image/ThumbnailGeneration';
-import { getFilenameFriendlyFormattedDateTime, getThumbnailPath, isDirEmpty } from '../../utils';
 import { ClearDbButton } from '../ErrorBoundary';
 import HotkeyMapper from './HotkeyMapper';
 import Tabs, { TabItem } from './Tabs';
@@ -76,13 +74,17 @@ const Appearance = observer(() => {
           <Toggle checked={uiStore.theme === 'dark'} onChange={uiStore.toggleTheme} />
         </fieldset>
 
+        <CustomThemePicker />
+      </div>
+
+      <div className="input-group">
+        <Zoom />
+
         <fieldset>
           <legend>Full screen</legend>
           <Toggle checked={uiStore.isFullScreen} onChange={toggleFullScreen} />
         </fieldset>
       </div>
-
-      <Zoom />
 
       <h3>Thumbnail</h3>
 
@@ -157,6 +159,41 @@ const Zoom = () => {
   );
 };
 
+const CustomThemePicker = () => {
+  const { theme, setTheme, refresh, options, themeDir } = useCustomTheme();
+
+  useEffect(() => {
+    refresh();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  return (
+    <fieldset>
+      <legend>Theme customization</legend>
+      <select onChange={(e) => setTheme(e.target.value)} defaultValue={theme}>
+        {<option value="">None (default)</option>}
+        {options.map((file) => (
+          <option key={file} value={file}>
+            {file.replace('.css', '')}
+          </option>
+        ))}
+      </select>{' '}
+      <IconButton
+        icon={IconSet.RELOAD}
+        text="Refresh"
+        onClick={refresh}
+        data-tooltip="Reload the list of themes and current theme"
+      />
+      <IconButton
+        icon={IconSet.FOLDER_CLOSE}
+        text="Open"
+        onClick={() => shell.showItemInFolder(themeDir)}
+        data-tooltip="Open the directory containing the theme files"
+      />
+    </fieldset>
+  );
+};
+
 const ImportExport = observer(() => {
   const rootStore = useStore();
   const { fileStore, tagStore, exifTool } = rootStore;
@@ -167,11 +204,11 @@ const ImportExport = observer(() => {
   }>();
   const [backupDir, setBackupDir] = useState('');
   useEffect(() => {
-    getDefaultBackupDirectory().then(setBackupDir);
+    RendererMessenger.getDefaultBackupDirectory().then(setBackupDir);
   }, []);
 
   const handleChooseImportDir = async () => {
-    const { filePaths } = await RendererMessenger.openDialog({
+    const { filePaths } = await RendererMessenger.showOpenDialog({
       properties: ['openFile'],
       filters: [{ extensions: ['json'], name: 'JSON' }],
       defaultPath: backupDir,
@@ -313,7 +350,7 @@ const ImportExport = observer(() => {
                 timeout: 5000,
               });
               try {
-                await rootStore.restoreDatabaseFromFile(isConfirmingFileImport?.path);
+                await rootStore.restoreDatabaseFromFile(isConfirmingFileImport.path);
                 RendererMessenger.reload();
               } catch (e) {
                 console.error('Could not restore backup', e);
@@ -452,7 +489,7 @@ const BackgroundProcesses = observer(() => {
 
   const importDirectory = uiStore.importDirectory;
   const browseImportDirectory = async () => {
-    const { filePaths: dirs } = await RendererMessenger.openDialog({
+    const { filePaths: dirs } = await RendererMessenger.showOpenDialog({
       properties: ['openDirectory'],
       defaultPath: importDirectory,
     });
@@ -557,12 +594,50 @@ const Shortcuts = observer(() => {
   );
 });
 
+const StartUpBehavior = observer(() => {
+  const { uiStore } = useStore();
+
+  const [isAutoUpdateEnabled, setAutoUpdateEnabled] = useState(
+    RendererMessenger.isCheckUpdatesOnStartupEnabled(),
+  );
+
+  const toggleAutoUpdate = useCallback(() => {
+    RendererMessenger.toggleCheckUpdatesOnStartup();
+    setAutoUpdateEnabled((isOn) => !isOn);
+  }, []);
+
+  return (
+    <>
+      <h2>Start-up behavior</h2>
+      <h3>Remember last search query</h3>
+      <fieldset>
+        <legend>
+          Will restore the search query you had open when you last quit Allusion, so the same images
+          will be shown in the gallery
+        </legend>
+        <Toggle
+          checked={uiStore.isRememberSearchEnabled}
+          onChange={uiStore.toggleRememberSearchQuery}
+        />
+      </fieldset>
+
+      <h3>Automatic updates</h3>
+      <fieldset>
+        <legend>Check for updates when starting Allusion</legend>
+        <Toggle checked={isAutoUpdateEnabled} onChange={toggleAutoUpdate} />
+      </fieldset>
+    </>
+  );
+});
+
 const Advanced = observer(() => {
   const { uiStore, fileStore } = useStore();
   const thumbnailDirectory = uiStore.thumbnailDirectory;
 
   const [defaultThumbnailDir, setDefaultThumbnailDir] = useState('');
-  useEffect(() => void getDefaultThumbnailDirectory().then(setDefaultThumbnailDir), []);
+  useEffect(() => {
+    RendererMessenger.getDefaultThumbnailDirectory().then(setDefaultThumbnailDir);
+  }, []);
 
   const changeThumbnailDirectory = async (newDir: string) => {
     const oldDir = thumbnailDirectory;
@@ -582,7 +657,7 @@ const Advanced = observer(() => {
   };
 
   const browseThumbnailDirectory = async () => {
-    const { filePaths: dirs } = await RendererMessenger.openDialog({
+    const { filePaths: dirs } = await RendererMessenger.showOpenDialog({
       properties: ['openDirectory'],
       defaultPath: thumbnailDirectory,
     });
@@ -604,15 +679,6 @@ const Advanced = observer(() => {
       changeThumbnailDirectory(newDir);
     }
   };
-
-  const [isAutoUpdateEnabled, setAutoUpdateEnabled] = useState(
-    RendererMessenger.isCheckUpdatesOnStartupEnabled(),
-  );
-
-  const toggleAutoUpdate = useCallback(() => {
-    RendererMessenger.toggleCheckUpdatesOnStartup();
-    setAutoUpdateEnabled((isOn) => !isOn);
-  }, []);
 
   return (
     <>
@@ -650,12 +716,6 @@ const Advanced = observer(() => {
           text="Toggle DevTools"
         />
       </ButtonGroup>
-
-      <h2>Automatic updates</h2>
-      <fieldset>
-        <legend>Check for updates when starting Allusion</legend>
-        <Toggle checked={isAutoUpdateEnabled} onChange={toggleAutoUpdate} />
-      </fieldset>
     </>
   );
 });
@@ -668,6 +728,10 @@ const SETTINGS_TABS: () => TabItem[] = () => [
   {
     label: 'Shortcuts',
     content: <Shortcuts />,
+  },
+  {
+    label: 'Start-up behavior',
+    content: <StartUpBehavior />,
   },
   {
     label: 'Image formats',

@@ -1,7 +1,7 @@
 import { runInAction } from 'mobx';
 import { ClientFile } from 'src/entities/File';
 // Force Webpack to include worker and WASM file in the build folder!
-import { default as init, MasonryWorker, MasonryType } from 'wasm/masonry/pkg/masonry';
+import { default as init, MasonryWorker, MasonryType } from 'wasm/packages/masonry';
 import { ITransform, Layouter } from './layout-helpers';
 
 export interface MasonryOptions {
@@ -30,10 +30,10 @@ export class MasonryWorkerAdapter implements Layouter {
     }
 
     console.debug('initializing masonry worker...');
-    const wasm = await init(new URL('wasm/masonry/pkg/masonry_bg.wasm', import.meta.url));
+    const wasm = await init();
     this.memory = wasm.memory;
 
-    const worker = new Worker(new URL('wasm/masonry/pkg/worker.js', import.meta.url), {
+    const worker = new Worker(new URL('wasm/packages/masonry/worker.js', import.meta.url), {
       type: 'module',
     });
     worker.postMessage(this.memory);
@@ -93,6 +93,6 @@ export class MasonryWorkerAdapter implements Layouter {
       throw new Error('Worker is uninitialized.');
     }
     const ptr = this.worker.get_transform(index);
-    return (new Uint32Array(this.memory.buffer, ptr, 4) as unknown) as ITransform;
+    return new Uint32Array(this.memory.buffer, ptr, 4) as unknown as ITransform;
   }
 }

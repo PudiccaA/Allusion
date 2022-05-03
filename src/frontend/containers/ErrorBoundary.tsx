@@ -3,7 +3,7 @@ import { shell } from 'electron';
 import { mapStackTrace } from 'sourcemapped-stacktrace';
 
 import { RendererMessenger } from 'src/Messaging';
-import { githubUrl } from 'src/config';
+import { createBugReport, githubUrl } from 'common/config';
 
 import { useStore } from '../contexts/StoreContext';
 
@@ -73,13 +73,14 @@ class ErrorBoundary extends React.Component<IErrorBoundaryProps, IErrorBoundaryS
 
   componentDidCatch(error: Error) {
     // TODO: Send error to logging service
+    console.error(error);
 
     // Map compiled error to source code
     mapStackTrace(error.stack, (sourceMappedStack: string[]) => {
       this.setState({
         error: [
           error.message,
-          ...sourceMappedStack.filter((line) => line.indexOf('bundle.js') === -1),
+          ...sourceMappedStack.filter((line) => !line.includes('bundle.js')),
         ].join('\n'),
       });
     });
@@ -94,17 +95,9 @@ class ErrorBoundary extends React.Component<IErrorBoundaryProps, IErrorBoundaryS
   }
 
   openIssueURL() {
-    const encodedBody = encodeURIComponent(`<!--- Please check if your issue is not a duplicate before posting -->
-<b>Which actions did you perform before the error occurred?</b>
-...
-
-<b>What did you expect to happen?</b>
-...
-
-<b>Stacktrace</b>
-\`\`\`
-${this.state.error}
-\`\`\``);
+    const encodedBody = encodeURIComponent(
+      createBugReport(this.state.error, RendererMessenger.getVersion()),
+    );
     const url = `${githubUrl}/issues/new?body=${encodedBody}`;
     shell.openExternal(url);
   }
@@ -112,6 +105,7 @@ ${this.state.error}
   render() {
     const { hasError, error } = this.state;
     if (hasError) {
+      console.error(error);
       // You can render any custom fallback UI
       return (
         <div className="error-boundary">

@@ -1,15 +1,14 @@
-import { action, observable, makeObservable } from 'mobx';
-
-import { ID, ISerializable } from './ID';
+import { action, Lambda, makeObservable, observable, observe } from 'mobx';
+import RootStore from 'src/frontend/stores/RootStore';
+import { camelCaseToSpaced } from 'common/fmt';
 import { IFile } from './File';
+import { ID, ISerializable } from './ID';
 
-import { camelCaseToSpaced } from 'src/frontend/utils';
-import TagStore from 'src/frontend/stores/TagStore';
-
-// type SearchCriteriaValueType = 'number' | 'string' |
+export type IFileSearchCriteria = SearchCriteria<IFile>;
+export type FileSearchCriteria = ClientBaseCriteria<IFile>;
 
 // A dictionary of labels for (some of) the keys of the type we search for
-export type SearchKeyDict<T> = { [key in keyof Partial<T>]: string };
+export type SearchKeyDict<T> = Partial<Record<keyof T, string>>;
 
 export const CustomKeyDict: SearchKeyDict<IFile> = { absolutePath: 'Path', locationId: 'Location' };
 
@@ -97,6 +96,7 @@ export interface INumberSearchCriteria<T> extends IBaseSearchCriteria<T> {
 
 export interface IDateSearchCriteria<T> extends IBaseSearchCriteria<T> {
   value: Date;
+  /** TODO: Would be cool to have relative time: e.g. modified today/last month */
   operator: NumberOperatorType;
 }
 
@@ -108,48 +108,81 @@ export type SearchCriteria<T> =
   | IDateSearchCriteria<T>;
 
 export abstract class ClientBaseCriteria<T>
-  implements IBaseSearchCriteria<T>, ISerializable<SearchCriteria<T>> {
+  implements IBaseSearchCriteria<T>, ISerializable<SearchCriteria<T>, RootStore>
+{
   @observable public key: keyof T;
   @observable public valueType: 'number' | 'date' | 'string' | 'array';
   @observable public operator: OperatorType;
-  readonly dict: SearchKeyDict<T>;
+
+  private disposers: Lambda[] = [];
 
   constructor(
     key: keyof T,
     valueType: 'number' | 'date' | 'string' | 'array',
     operator: OperatorType,
-    dict?: SearchKeyDict<T>,
   ) {
     this.key = key;
     this.valueType = valueType;
     this.operator = operator;
-    this.dict = dict || ({} as SearchKeyDict<T>);
     makeObservable(this);
   }
 
-  abstract toString(): string;
-  abstract serialize(): SearchCriteria<T>;
+  abstract getLabel(dict: SearchKeyDict<T>, rootStore: RootStore): string;
+  abstract serialize(rootStore: RootStore): SearchCriteria<T>;
+
+  static deserialize<T>(criteria: SearchCriteria<T>): ClientBaseCriteria<T> {
+    const { valueType } = criteria;
+    switch (valueType) {
+      case 'number':
+        const num = criteria as INumberSearchCriteria<T>;
+        return new ClientNumberSearchCriteria(num.key, num.value, num.operator);
+      case 'date':
+        const dat = criteria as IDateSearchCriteria<T>;
+        return new ClientDateSearchCriteria(dat.key, dat.value, dat.operator);
+      case 'string':
+        const str = criteria as IStringSearchCriteria<T>;
+        return new ClientStringSearchCriteria(str.key, str.value, str.operator);
+      case 'array':
+        // Deserialize the array criteria: it's transformed from 1 ID into a list of IDs in serialize()
+        // and untransformed here from a list of IDs to 1 ID
+        const arr = criteria as ITagSearchCriteria<T>;
+        const op =
+          arr.value.length <= 1
+            ? arr.operator
+            : arr.operator === 'contains'
+            ? 'containsRecursively'
+            : arr.operator === 'notContains'
+            ? 'containsNotRecursively'
+            : arr.operator;
+        const value = arr.value[0];
+        return new ClientTagSearchCriteria(arr.key, value, op);
+      default:
+        throw new Error(`Unknown value type ${valueType}`);
+    }
+  }
+
+  observe(callback: (criteria: ClientBaseCriteria<T>) => void): void {
+    this.disposers.push(
+      observe(this, 'key', () => callback(this)),
+      observe(this, 'valueType', () => callback(this)),
+      observe(this, 'operator', () => callback(this)),
+      observe(this as typeof this & { value: unknown }, 'value', () => callback(this)),
+    );
+  }
+
+  dispose(): void {
+    for (const disposer of this.disposers) {
+      disposer();
+    }
+  }
 }
 
 export class ClientTagSearchCriteria<T> extends ClientBaseCriteria<T> {
-  public readonly value = observable<ID>([]);
-  @observable public label: string;
-  private tagStore: TagStore;
+  @observable public value?: ID;
 
-  constructor(
-    tagStore: TagStore,
-    key: keyof T,
-    id?: ID,
-    label: string = '',
-    operator: TagOperatorType = 'containsRecursively',
-    dict?: SearchKeyDict<T>,
-  ) {
-    super(key, 'array', operator, dict);
-    if (id) {
-      this.value.push(id);
-    }
-    this.label = label;
-    this.tagStore = tagStore;
+  constructor(key: keyof T, id?: ID, operator: TagOperatorType = 'containsRecursively') {
+    super(key, 'array', operator);
+    this.value = id;
     makeObservable(this);
   }
 
@@ -157,34 +190,38 @@ export class ClientTagSearchCriteria<T> extends ClientBaseCriteria<T> {
    * A flag for when the tag may be interpreted as a real tag, but contains text created by the application.
    * (this makes is so that "Untagged images" can be italicized)
    **/
-  isSystemTag = (): boolean => {
-    return !this.value.length && !this.operator.toLowerCase().includes('not');
+  @action.bound isSystemTag = (): boolean => {
+    return !this.value && !this.operator.toLowerCase().includes('not');
   };
 
-  toString: () => string = () => {
-    if (!this.value.length && !this.operator.toLowerCase().includes('not')) {
+  @action.bound getLabel: (dict: SearchKeyDict<T>, rootStore: RootStore) => string = (
+    dict,
+    rootStore,
+  ) => {
+    if (!this.value && !this.operator.toLowerCase().includes('not')) {
       return 'Untagged images';
     }
-    return `${this.dict[this.key] || camelCaseToSpaced(this.key as string)} ${camelCaseToSpaced(
+    return `${dict[this.key] || camelCaseToSpaced(this.key as string)} ${camelCaseToSpaced(
       this.operator,
-    )} ${this.value.length === 0 ? 'no tags' : this.label}`;
+    )} ${!this.value ? 'no tags' : rootStore.tagStore.get(this.value)?.name}`;
   };
 
   @action.bound
-  serialize = (): ITagSearchCriteria<T> => {
+  serialize = (rootStore: RootStore): ITagSearchCriteria<T> => {
     // for the *recursive options, convert it to the corresponding non-recursive option,
     // by putting all child IDs in the value in the serialization step
     let op = this.operator as TagOperatorType;
-    let val = this.value.toJSON();
+    let val = this.value ? [this.value] : [];
     if (val.length > 0 && op.includes('Recursively')) {
-      val =
-        this.tagStore
-          .get(val[0])
-          ?.getSubTreeList()
-          ?.map((t) => t.id) || [];
+      const tag = rootStore.tagStore.get(val[0]);
+      val = tag !== undefined ? Array.from(tag.getSubTree(), (t) => t.id) : [];
     }
-    if (op === 'containsNotRecursively') op = 'notContains';
-    if (op === 'containsRecursively') op = 'contains';
+    if (op === 'containsNotRecursively') {
+      op = 'notContains';
+    }
+    if (op === 'containsRecursively') {
+      op = 'contains';
+    }
 
     return {
       key: this.key,
@@ -198,35 +235,26 @@ export class ClientTagSearchCriteria<T> extends ClientBaseCriteria<T> {
     this.operator = op;
   }
 
-  @action.bound setValue(value: ID, label: string): void {
-    this.value.replace([value]);
-    this.label = label;
+  @action.bound setValue(value: ID): void {
+    this.value = value;
   }
 }
 
 export class ClientStringSearchCriteria<T> extends ClientBaseCriteria<T> {
   @observable public value: string;
-  @observable public label?: string;
 
-  constructor(
-    key: keyof T,
-    value: string = '',
-    operator: StringOperatorType = 'contains',
-    dict?: SearchKeyDict<T>,
-    label?: string,
-  ) {
-    super(key, 'string', operator, dict);
+  constructor(key: keyof T, value: string = '', operator: StringOperatorType = 'contains') {
+    super(key, 'string', operator);
     this.value = value;
-    this.label = label;
     makeObservable(this);
   }
 
-  toString: () => string = () =>
-    `${this.dict[this.key] || camelCaseToSpaced(this.key as string)} ${
+  @action.bound getLabel: (dict: SearchKeyDict<T>) => string = (dict) =>
+    `${dict[this.key] || camelCaseToSpaced(this.key as string)} ${
       StringOperatorLabels[this.operator as StringOperatorType] || camelCaseToSpaced(this.operator)
-    } "${this.label || this.value}"`;
+    } "${this.value}"`;
 
-  serialize = (): IStringSearchCriteria<T> => {
+  @action.bound serialize = (): IStringSearchCriteria<T> => {
     return {
       key: this.key,
       valueType: this.valueType,
@@ -251,18 +279,17 @@ export class ClientNumberSearchCriteria<T> extends ClientBaseCriteria<T> {
     key: keyof T,
     value: number = 0,
     operator: NumberOperatorType = 'greaterThanOrEquals',
-    dict?: SearchKeyDict<T>,
   ) {
-    super(key, 'number', operator, dict);
+    super(key, 'number', operator);
     this.value = value;
     makeObservable(this);
   }
-  toString: () => string = () =>
+  @action.bound getLabel: () => string = () =>
     `${camelCaseToSpaced(this.key as string)} ${
       NumberOperatorSymbols[this.operator as NumberOperatorType] || camelCaseToSpaced(this.operator)
     } ${this.value}`;
 
-  serialize = (): INumberSearchCriteria<T> => {
+  @action.bound serialize = (): INumberSearchCriteria<T> => {
     return {
       key: this.key,
       valueType: this.valueType,
@@ -283,24 +310,19 @@ export class ClientNumberSearchCriteria<T> extends ClientBaseCriteria<T> {
 export class ClientDateSearchCriteria<T> extends ClientBaseCriteria<T> {
   @observable public value: Date;
 
-  constructor(
-    key: keyof T,
-    value: Date = new Date(),
-    operator: NumberOperatorType = 'equals',
-    dict?: SearchKeyDict<T>,
-  ) {
-    super(key, 'date', operator, dict);
+  constructor(key: keyof T, value: Date = new Date(), operator: NumberOperatorType = 'equals') {
+    super(key, 'date', operator);
     this.value = value;
     this.value.setHours(0, 0, 0, 0);
     makeObservable(this);
   }
 
-  toString: () => string = () =>
-    `${this.dict[this.key] || camelCaseToSpaced(this.key as string)} ${
+  @action.bound getLabel: (dict: SearchKeyDict<T>) => string = (dict) =>
+    `${dict[this.key] || camelCaseToSpaced(this.key as string)} ${
       NumberOperatorSymbols[this.operator as NumberOperatorType] || camelCaseToSpaced(this.operator)
     } ${this.value.toLocaleDateString()}`;
 
-  serialize = (): IDateSearchCriteria<T> => {
+  @action.bound serialize = (): IDateSearchCriteria<T> => {
     return {
       key: this.key,
       valueType: this.valueType,

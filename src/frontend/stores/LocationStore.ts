@@ -1,15 +1,22 @@
 import { action, makeObservable, observable, runInAction } from 'mobx';
 import SysPath from 'path';
 import Backend from 'src/backend/Backend';
-import { FileOrder } from 'src/backend/DBRepository';
-import ExifIO from 'src/backend/ExifIO';
-import { getMetaData, IFile, IMG_EXTENSIONS, IMG_EXTENSIONS_TYPE } from 'src/entities/File';
+import { OrderDirection } from 'src/backend/DBRepository';
+import ExifIO from 'common/ExifIO';
+import {
+  getMetaData,
+  IFile,
+  IMG_EXTENSIONS,
+  IMG_EXTENSIONS_TYPE,
+  mergeMovedFile,
+} from 'src/entities/File';
 import { generateId, ID } from 'src/entities/ID';
 import { ClientLocation, ClientSubLocation, ILocation } from 'src/entities/Location';
 import { ClientStringSearchCriteria } from 'src/entities/SearchCriteria';
 import { AppToaster } from 'src/frontend/components/Toaster';
 import { RendererMessenger } from 'src/Messaging';
-import { getThumbnailPath, promiseAllLimit } from '../utils';
+import { getThumbnailPath } from 'common/fs';
+import { promiseAllLimit } from 'common/promise';
 import RootStore from './RootStore';
 import fse from 'fs-extra';
 
@@ -23,9 +30,10 @@ type Preferences = { extensions: IMG_EXTENSIONS_TYPE[] };
  */
 function areFilesIdenticalBesidesName(a: IFile, b: IFile): boolean {
   return (
-    a.width === b.width &&
-    a.height === b.height &&
-    a.dateCreated.getTime() === b.dateCreated.getTime()
+    a.ino === b.ino ||
+    (a.width === b.width &&
+      a.height === b.height &&
+      a.dateCreated.getTime() === b.dateCreated.getTime())
   );
 }
 
@@ -37,7 +45,7 @@ class LocationStore {
 
   // Allow users to disable certain file types. Global option for now, needs restart
   // TODO: Maybe per location/sub-location?
-  enabledFileExtensions = observable(new Set<IMG_EXTENSIONS_TYPE>());
+  readonly enabledFileExtensions = observable(new Set<IMG_EXTENSIONS_TYPE>());
 
   constructor(backend: Backend, rootStore: RootStore) {
     this.backend = backend;
@@ -59,16 +67,23 @@ class LocationStore {
     }
 
     // Get dirs from backend
-    const dirs = await this.backend.fetchLocations('dateAdded', FileOrder.Asc);
+    const dirs = await this.backend.fetchLocations('dateAdded', OrderDirection.Asc);
+
+    // backwards compatibility
+    dirs.sort((a, b) =>
+      a.index === b.index ? a.dateAdded.getTime() - b.dateAdded.getTime() : a.index - b.index,
+    );
+
     const locations = dirs.map(
-      (dir) =>
+      (dir, i) =>
         new ClientLocation(
           this,
           dir.id,
           dir.path,
           dir.dateAdded,
           dir.subLocations,
-          runInAction(() => this.enabledFileExtensions.toJSON()),
+          runInAction(() => Array.from(this.enabledFileExtensions)),
+          dir.index ?? i,
         ),
     );
     runInAction(() => this.locationList.replace(locations));
@@ -89,7 +104,7 @@ class LocationStore {
     // Get all files in the DB, set up data structures for quick lookups
     // Doing it for all locations, so files moved to another Location on disk, it's properly re-assigned in Allusion too
     // TODO: Could be optimized, at startup we already fetch all files, don't need to fetch them again here
-    const dbFiles: IFile[] = await this.backend.fetchFiles('id', FileOrder.Asc);
+    const dbFiles: IFile[] = await this.backend.fetchFiles('id', OrderDirection.Asc);
     const dbFilesPathSet = new Set(dbFiles.map((f) => f.absolutePath));
     const dbFilesByCreatedDate = new Map<number, IFile[]>();
     for (const file of dbFiles) {
@@ -130,10 +145,9 @@ class LocationStore {
           },
           'retry-init',
         );
-      }, 10000);
+      }, 20000);
 
-      // TODO: get stats from chokidar too: no need to fse.stat(). Then check whether file has been modified and needs a new thumbnail
-      console.debug('Location init...');
+      console.groupCollapsed(`Initializing location ${location.name}`);
       const diskFiles = await location.init();
       const diskFileMap = new Map<string, FileStats>(
         diskFiles?.map((f) => [f.absolutePath, f]) ?? [],
@@ -148,8 +162,9 @@ class LocationStore {
             message: `Cannot find Location "${location.name}"`,
             timeout: 0,
           },
+          // a key such that the toast can be dismissed automatically on recovery
           `missing-loc-${location.id}`,
-        ); // a key such that the toast can be dismissed automatically on recovery
+        );
         continue;
       }
 
@@ -166,12 +181,15 @@ class LocationStore {
       );
 
       // Find matches between removed and created images (different name/path but same characteristics)
+      // TODO: use the ino field on files for this
       const createdMatches = missingFiles.map((mf) =>
         createdFiles.find((cf) => areFilesIdenticalBesidesName(cf, mf)),
       );
       // Also look for duplicate files: when a files is renamed/moved it will become a new entry, should be de-duplicated
       const dbMatches = missingFiles.map((missingDbFile, i) => {
-        if (createdMatches[i]) return false; // skip missing files that match with a newly created file
+        if (createdMatches[i]) {
+          return false;
+        } // skip missing files that match with a newly created file
         // Quick lookup for files with same created date,
         const candidates = dbFilesByCreatedDate.get(missingDbFile.dateCreated.getTime()) || [];
 
@@ -204,11 +222,11 @@ class LocationStore {
           foundCreatedMatches,
         );
         // TODO: remove thumbnail as well (clean-up needed, since the path changed)
-        const files: IFile[] = [];
+        const renamedFilesToUpdate: IFile[] = [];
         for (let i = 0; i < createdMatches.length; i++) {
           const match = createdMatches[i];
           if (match) {
-            files.push({
+            renamedFilesToUpdate.push({
               ...missingFiles[i],
               absolutePath: match.absolutePath,
               relativePath: match.relativePath,
@@ -216,12 +234,12 @@ class LocationStore {
           }
         }
         // There might be duplicates, so convert to set
-        await this.backend.saveFiles(Array.from(new Set(files)));
+        await this.backend.saveFiles(Array.from(new Set(renamedFilesToUpdate)));
       }
 
       const numDbMatches = dbMatches.filter((f) => Boolean(f));
       if (numDbMatches.length > 0) {
-        // If you have allusion open and rename/move files, they are automatically created as new files while the old one sticks around
+        // Renaming/moving files will be created as new files while the old one sticks around
         // In here we transfer the tag data over from the old entry to the new one, and delete the old entry
         console.debug(
           `Found ${numDbMatches.length} renamed/moved files in location ${location.name} that were already present in the database. Removing duplicates`,
@@ -243,7 +261,7 @@ class LocationStore {
         await this.backend.removeFiles(
           missingFiles.filter((_, i) => Boolean(dbMatches[i])).map((f) => f.id),
         );
-        foundNewFiles = true; // Trigger a refetch
+        foundNewFiles = true; // Set a flag to trigger a refetch
       }
 
       // For createdFiles without a match, insert them in the DB as new files
@@ -283,6 +301,8 @@ class LocationStore {
         await this.backend.saveFiles(updatedFiles);
       }
 
+      console.groupEnd();
+
       foundNewFiles = foundNewFiles || newFiles.length > 0;
     }
 
@@ -318,9 +338,10 @@ class LocationStore {
       newPath,
       location.dateAdded,
       location.subLocations,
-      runInAction(() => this.enabledFileExtensions.toJSON()),
+      runInAction(() => Array.from(this.enabledFileExtensions)),
+      this.locationList.length,
     );
-    this.set(index, newLocation);
+    runInAction(() => (this.locationList[index] = newLocation));
     await this.initLocation(newLocation);
     await this.backend.saveLocation(newLocation.serialize());
     // Refetch files in case some were from this location and could not be found before
@@ -341,7 +362,8 @@ class LocationStore {
       path,
       new Date(),
       [],
-      runInAction(() => this.enabledFileExtensions.toJSON()),
+      runInAction(() => Array.from(this.enabledFileExtensions)),
+      this.locationList.length,
     );
     await this.backend.createLocation(location.serialize());
     runInAction(() => this.locationList.push(location));
@@ -429,36 +451,54 @@ class LocationStore {
     this.enabledFileExtensions.replace(extensions);
     localStorage.setItem(
       PREFERENCES_STORAGE_KEY,
-      JSON.stringify({ extensions: this.enabledFileExtensions.toJSON() } as Preferences, null, 2),
+      JSON.stringify(
+        { extensions: Array.from(this.enabledFileExtensions) } as Preferences,
+        null,
+        2,
+      ),
     );
   }
 
   @action async addFile(fileStats: FileStats, location: ClientLocation) {
-    const file = await pathToIFile(fileStats, location, this.rootStore.exifTool);
-    await this.backend.createFilesFromPath(fileStats.absolutePath, [file]);
+    const fileStore = this.rootStore.fileStore;
 
-    AppToaster.show({ message: 'New images have been detected.', timeout: 5000 }, 'new-images');
-    // might be called a lot when moving many images into a folder, so debounce it
-    this.rootStore.fileStore.debouncedRefetch();
+    // Gather file data
+    const file = await pathToIFile(fileStats, location, this.rootStore.exifTool);
+
+    // Check if file is being moved/renamed (which is detected as a "add" event followed by "remove" event)
+    const match = runInAction(() => fileStore.fileList.find((f) => f.ino === fileStats.ino));
+    const dbMatch = match
+      ? undefined
+      : (await this.backend.fetchFilesByKey('ino', fileStats.ino))[0];
+
+    if (match) {
+      if (fileStats.absolutePath === match.absolutePath) {
+        return;
+      }
+      fileStore.replaceMovedFile(match, file);
+    } else if (dbMatch) {
+      const newIFile = mergeMovedFile(dbMatch, file);
+      this.rootStore.fileStore.save(newIFile);
+    } else {
+      await this.backend.createFilesFromPath(fileStats.absolutePath, [file]);
+
+      AppToaster.show({ message: 'New images have been detected.', timeout: 5000 }, 'new-images');
+      // might be called a lot when moving many images into a folder, so debounce it
+      fileStore.debouncedRefetch();
+    }
   }
 
   @action hideFile(path: string) {
     // This is called when an image is removed from the filesystem.
-    // Could also mean that a file was renamed or moved, in which case another file should have been added already
+    // Could also mean that a file was renamed or moved, in which case addFile was called already:
+    // its path will have changed, so we won't find it here, which is fine, it'll be detected as missing later.
     const fileStore = this.rootStore.fileStore;
     const clientFile = fileStore.fileList.find((f) => f.absolutePath === path);
-    if (clientFile !== undefined) {
-      fileStore.hideFile(clientFile);
-      fileStore.refetch();
-    }
 
-    AppToaster.show(
-      {
-        message: 'Some images have gone missing! Restart Allusion to detect moved/renamed files',
-        timeout: 8000,
-      },
-      'missing',
-    );
+    if (clientFile) {
+      fileStore.hideFile(clientFile);
+      fileStore.debouncedRefetch();
+    }
   }
 
   /**
@@ -466,7 +506,7 @@ class LocationStore {
    */
   @action async findLocationFiles(locationId: ID): Promise<IFile[]> {
     const crit = new ClientStringSearchCriteria('locationId', locationId, 'equals').serialize();
-    return this.backend.searchFiles(crit, 'id', FileOrder.Asc);
+    return this.backend.searchFiles(crit, 'id', OrderDirection.Asc);
   }
 
   @action async removeSublocationFiles(subLoc: ClientSubLocation): Promise<void> {
@@ -475,13 +515,27 @@ class LocationStore {
       subLoc.path,
       'startsWith',
     ).serialize();
-    const files = await this.backend.searchFiles(crit, 'id', FileOrder.Asc);
+    const files = await this.backend.searchFiles(crit, 'id', OrderDirection.Asc);
     await this.backend.removeFiles(files.map((f) => f.id));
     this.rootStore.fileStore.refetch();
   }
 
-  @action private set(index: number, location: ClientLocation) {
-    this.locationList[index] = location;
+  /** Source is moved to where Target currently is */
+  @action.bound reorder(source: ClientLocation, target: ClientLocation) {
+    const sourceIndex = this.locationList.indexOf(source);
+    const targetIndex = this.locationList.indexOf(target);
+
+    // Remove the source element and insert it at the target index
+    this.locationList.remove(source);
+    this.locationList.splice(targetIndex, 0, source);
+
+    // Update the index for all changed items: all items between source and target have been moved
+    const startIndex = Math.min(sourceIndex, targetIndex);
+    const endIndex = Math.max(sourceIndex, targetIndex);
+    for (let i = startIndex; i <= endIndex; i++) {
+      this.locationList[i].setIndex(i);
+      this.save(this.locationList[i].serialize());
+    }
   }
 }
 
@@ -493,13 +547,20 @@ export type FileStats = {
   dateCreated: Date;
   /** Current size of the file in bytes */
   size: number;
+  /** A unique identifier of the file created by the OS, stays identical even when renaming/moving files */
+  ino: string;
 };
 
-async function pathToIFile(stats: FileStats, loc: ClientLocation, exifIO: ExifIO): Promise<IFile> {
+export async function pathToIFile(
+  stats: FileStats,
+  loc: ClientLocation,
+  exifIO: ExifIO,
+): Promise<IFile> {
   const now = new Date();
   return {
     absolutePath: stats.absolutePath,
     relativePath: stats.absolutePath.replace(loc.path, ''),
+    ino: stats.ino,
     id: generateId(),
     locationId: loc.id,
     tags: [],

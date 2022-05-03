@@ -4,11 +4,12 @@ import { observer } from 'mobx-react-lite';
 import React, { useEffect, useRef } from 'react';
 import { Split } from 'widgets/Split';
 import { useStore } from '../contexts/StoreContext';
-import TagDnDProvider, { DnDAttribute } from '../contexts/TagDnDContext';
+import { TagDnDProvider, DnDAttribute } from '../contexts/TagDnDContext';
 import AppToolbar from './AppToolbar';
 import ContentView from './ContentView';
 import Outliner from './Outliner';
 import { useAction } from '../hooks/mobx';
+import { ContextMenuLayer } from 'widgets/menus';
 
 const Main = () => {
   const { uiStore } = useStore();
@@ -39,7 +40,9 @@ const Main = () => {
   }, []);
 
   const handleShortcuts = useAction((e: React.KeyboardEvent) => {
-    if ((e.target as HTMLElement).matches?.('input')) return;
+    if ((e.target as HTMLElement).matches('input')) {
+      return;
+    }
     const combo = getKeyCombo(e.nativeEvent);
     const matches = (c: string): boolean => {
       return comboMatches(combo, parseKeyCombo(c));
@@ -53,27 +56,31 @@ const Main = () => {
     } else if (matches(hotkeyMap.openTagEditor)) {
       e.preventDefault();
       uiStore.openToolbarTagPopover();
+    } else if (matches(hotkeyMap.deleteSelection)) {
+      uiStore.openMoveFilesToTrash();
     }
   });
 
   return (
-    <TagDnDProvider value={data.current}>
-      <Split
-        id="window-splitter"
-        primary={<Outliner />}
-        secondary={
-          <main id="main" onKeyDown={handleShortcuts}>
-            <AppToolbar />
-            <ContentView />
-          </main>
-        }
-        axis="vertical"
-        align="left"
-        splitPoint={uiStore.outlinerWidth}
-        isExpanded={uiStore.isOutlinerOpen}
-        onMove={uiStore.moveOutlinerSplitter}
-      />
-    </TagDnDProvider>
+    <ContextMenuLayer>
+      <TagDnDProvider value={data.current}>
+        <Split
+          id="window-splitter"
+          primary={<Outliner />}
+          secondary={
+            <main id="main" onKeyDown={handleShortcuts}>
+              <AppToolbar />
+              <ContentView />
+            </main>
+          }
+          axis="vertical"
+          align="left"
+          splitPoint={uiStore.outlinerWidth}
+          isExpanded={uiStore.isOutlinerOpen}
+          onMove={uiStore.moveOutlinerSplitter}
+        />
+      </TagDnDProvider>
+    </ContextMenuLayer>
   );
 };
 

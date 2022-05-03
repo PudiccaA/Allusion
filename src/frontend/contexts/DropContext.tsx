@@ -10,18 +10,21 @@ export const ALLOWED_DROP_TYPES = ['Files', 'text/html', 'text/plain'];
 const DropContext = React.createContext<DropState>({ isDropping: false });
 export default DropContext;
 
-export const DropContextProvider = (props: {
+export const DropContextProvider = ({
+  onDragEnter,
+  children,
+}: {
   children: React.ReactNode;
   onDragEnter: () => void;
 }) => {
   const dropState = useFileDropper();
   useEffect(() => {
     if (dropState.isDropping) {
-      props.onDragEnter();
+      onDragEnter();
     }
-  }, [props.onDragEnter, dropState.isDropping, props]);
+  }, [onDragEnter, dropState.isDropping]);
 
-  return <DropContext.Provider value={dropState}>{props.children}</DropContext.Provider>;
+  return <DropContext.Provider value={dropState}>{children}</DropContext.Provider>;
 };
 
 /**
@@ -38,7 +41,9 @@ const useFileDropper = () => {
       enterCount.current++;
 
       // We only have to check once, until drag leave
-      if (enterCount.current > 1) return;
+      if (enterCount.current > 1) {
+        return;
+      }
 
       e.dataTransfer!.dropEffect = 'none';
 
@@ -46,8 +51,7 @@ const useFileDropper = () => {
       // FIXME: Yes, this is hacky. But... The native drag event does not allow you to specify any metadata, just a list of files...
       const w = window as any;
       const isInternalEvent =
-        w.internalDragStart &&
-        new Date().getTime() - (w.internalDragStart as Date)?.getTime() < 300;
+        w.internalDragStart && new Date().getTime() - (w.internalDragStart as Date).getTime() < 300;
       if (!isInternalEvent) {
         const isCorrectType = e.dataTransfer?.types.some((type) =>
           ALLOWED_DROP_TYPES.includes(type),

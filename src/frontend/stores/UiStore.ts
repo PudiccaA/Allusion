@@ -1,17 +1,21 @@
 import fse from 'fs-extra';
 import { action, computed, makeObservable, observable, observe } from 'mobx';
-import { getDefaultThumbnailDirectory } from 'src/config';
 import { ClientFile, IFile } from 'src/entities/File';
 import { ID } from 'src/entities/ID';
-import { ClientBaseCriteria, ClientTagSearchCriteria } from 'src/entities/SearchCriteria';
+import {
+  ClientBaseCriteria,
+  ClientTagSearchCriteria,
+  FileSearchCriteria,
+  SearchCriteria,
+} from 'src/entities/SearchCriteria';
 import { ClientTag } from 'src/entities/Tag';
 import { RendererMessenger } from 'src/Messaging';
-import { IS_PREVIEW_WINDOW } from 'src/renderer';
+import { IS_PREVIEW_WINDOW } from 'common/window';
 import { comboMatches, getKeyCombo, parseKeyCombo } from '../hotkeyParser';
-import { clamp, debounce } from '../utils';
+import { clamp, notEmpty } from 'common/core';
+import { debounce } from 'common/timeout';
 import RootStore from './RootStore';
 
-export type FileSearchCriteria = ClientBaseCriteria<IFile>;
 export const enum ViewMethod {
   List,
   Grid,
@@ -103,6 +107,11 @@ const PersistentPreferenceFields: Array<keyof UiStore> = [
   'isThumbnailFilenameOverlayEnabled',
   'outlinerWidth',
   'inspectorWidth',
+  'isRememberSearchEnabled',
+  // the following are only restored when isRememberSearchEnabled is enabled
+  'isSlideMode',
+  'firstItem',
+  'searchMatchAny',
 ];
 
 class UiStore {
@@ -136,6 +145,8 @@ class UiStore {
   /** Whether to show the tags on images in the content view */
   @observable isThumbnailTagOverlayEnabled: boolean = true;
   @observable isThumbnailFilenameOverlayEnabled: boolean = false;
+  /** Whether to restore the last search query on start-up */
+  @observable isRememberSearchEnabled: boolean = true;
   /** Index of the first item in the viewport. Also acts as the current item shown in slide mode */
   // TODO: Might be better to store the ID to the file. I believe we were storing the index for performance, but we have instant conversion between index/ID now
   @observable firstItem: number = 0;
@@ -161,14 +172,20 @@ class UiStore {
 
   @observable readonly hotkeyMap: IHotkeyMap = observable(defaultHotkeyMap);
 
+  private debouncedStorePersistentPreferences: () => void;
+
   constructor(rootStore: RootStore) {
     this.rootStore = rootStore;
     makeObservable(this);
 
     // Store preferences immediately when anything is changed
+    this.debouncedStorePersistentPreferences = debounce(this.storePersistentPreferences, 200).bind(
+      this,
+    );
     if (!IS_PREVIEW_WINDOW) {
-      const debouncedPersist = debounce(this.storePersistentPreferences, 200).bind(this);
-      PersistentPreferenceFields.forEach((f) => observe(this, f, debouncedPersist));
+      PersistentPreferenceFields.forEach((f) =>
+        observe(this, f, this.debouncedStorePersistentPreferences),
+      );
     }
   }
 
@@ -218,7 +235,7 @@ class UiStore {
   }
 
   @action updateWindowTitle() {
-    if (this.isSlideMode) {
+    if (this.isSlideMode && this.rootStore.fileStore.fileList.length > 0) {
       const activeFile = this.rootStore.fileStore.fileList[this.firstItem];
       this.windowTitle = `${activeFile.filename}.${activeFile.extension} - Allusion`;
     } else {
@@ -255,6 +272,7 @@ class UiStore {
 
   @action.bound enableSlideMode() {
     this.isSlideMode = true;
+    this.updateWindowTitle();
   }
 
   @action.bound disableSlideMode() {
@@ -264,6 +282,7 @@ class UiStore {
 
   @action.bound toggleSlideMode() {
     this.isSlideMode = !this.isSlideMode;
+    this.updateWindowTitle();
   }
 
   /** This does not actually set the window to full-screen, just for bookkeeping! Use RendererMessenger instead */
@@ -287,6 +306,10 @@ class UiStore {
     this.isThumbnailFilenameOverlayEnabled = !this.isThumbnailFilenameOverlayEnabled;
   }
 
+  @action.bound toggleRememberSearchQuery() {
+    this.isRememberSearchEnabled = !this.isRememberSearchEnabled;
+  }
+
   @action.bound openOutliner() {
     this.setIsOutlinerOpen(true);
   }
@@ -303,13 +326,12 @@ class UiStore {
 
     // If only one image was selected, open all images, but focus on the selected image. Otherwise, open selected images
     // TODO: FIXME: Disabled for now: makes it a lot less "snappy", takes a while for the message to come through
-    const previewFiles = Array.from(this.fileSelection);
     // this.fileSelection.size === 1
     //   ? this.rootStore.fileStore.fileList
     //   : Array.from(this.fileSelection);
 
     RendererMessenger.sendPreviewFiles({
-      ids: previewFiles.map((file) => file.id),
+      ids: Array.from(this.fileSelection, (file) => file.id),
       activeImgId: this.getFirstSelectedFileId(),
       thumbnailDirectory: this.thumbnailDirectory,
       viewMethod: this.method,
@@ -371,7 +393,9 @@ class UiStore {
   }
 
   @action.bound closeMoveFilesToTrash() {
-    this.isMoveFilesToTrashOpen = false;
+    if (this.fileSelection.size > 0) {
+      this.isMoveFilesToTrashOpen = false;
+    }
   }
 
   @action.bound toggleToolbarTagPopover() {
@@ -575,6 +599,7 @@ class UiStore {
   /////////////////// Search Actions ///////////////////
   @action.bound clearSearchCriteriaList() {
     if (this.searchCriteriaList.length > 0) {
+      this.searchCriteriaList.forEach((c) => c.dispose());
       this.searchCriteriaList.clear();
       this.viewAllContent();
     }
@@ -583,14 +608,44 @@ class UiStore {
   @action.bound addSearchCriteria(query: Exclude<FileSearchCriteria, 'key'>) {
     this.searchCriteriaList.push(query);
     this.viewQueryContent();
+    query.observe(this.debouncedStorePersistentPreferences);
   }
 
   @action.bound addSearchCriterias(queries: Exclude<FileSearchCriteria[], 'key'>) {
     this.searchCriteriaList.push(...queries);
+    queries.forEach((query) => query.observe(this.debouncedStorePersistentPreferences));
     this.viewQueryContent();
   }
 
+  @action.bound toggleSearchCriterias(queries: Exclude<FileSearchCriteria[], 'key'>) {
+    // TODO: can be improved
+    const deepEqual = (a: any, b: any) => JSON.stringify(a) === JSON.stringify(b);
+
+    // With control, add or remove the criteria based on whether they're already being searched with
+    const existingMatchingCriterias = queries.map((crit) =>
+      this.searchCriteriaList.find((other) =>
+        deepEqual(other.serialize(this.rootStore), crit.serialize(this.rootStore)),
+      ),
+    );
+    if (existingMatchingCriterias.every(notEmpty)) {
+      // If they're already in there, remove them
+      existingMatchingCriterias.forEach((query) => {
+        this.searchCriteriaList.remove(query);
+        query.dispose();
+      });
+      if (this.searchCriteriaList.length > 0) {
+        this.viewQueryContent();
+      } else {
+        this.viewAllContent();
+      }
+    } else {
+      // If they're not already in there, add them
+      this.addSearchCriterias(queries);
+    }
+  }
+
   @action.bound removeSearchCriteria(query: FileSearchCriteria) {
+    query.dispose();
     this.searchCriteriaList.remove(query);
     if (this.searchCriteriaList.length > 0) {
       this.viewQueryContent();
@@ -604,7 +659,12 @@ class UiStore {
   }
 
   @action.bound replaceSearchCriterias(queries: Exclude<FileSearchCriteria[], 'key'>) {
+    this.searchCriteriaList.forEach((c) => c.dispose());
+
     this.searchCriteriaList.replace(queries);
+
+    queries.forEach((query) => query.observe(this.debouncedStorePersistentPreferences));
+
     if (this.searchCriteriaList.length > 0) {
       this.viewQueryContent();
     } else {
@@ -613,7 +673,10 @@ class UiStore {
   }
 
   @action.bound removeSearchCriteriaByIndex(i: number) {
-    this.searchCriteriaList.splice(i, 1);
+    const removedCrits = this.searchCriteriaList.splice(i, 1);
+
+    removedCrits.forEach((c) => c.dispose());
+
     if (this.searchCriteriaList.length > 0) {
       this.viewQueryContent();
     } else {
@@ -622,21 +685,18 @@ class UiStore {
   }
 
   @action.bound addTagSelectionToCriteria() {
-    this.addSearchCriterias(
-      Array.from(
-        this.tagSelection,
-        (tag) => new ClientTagSearchCriteria(this.rootStore.tagStore, 'tags', tag.id),
-      ),
+    const newCrits = Array.from(
+      this.tagSelection,
+      (tag) => new ClientTagSearchCriteria('tags', tag.id),
     );
+    newCrits.forEach((crit) => crit.observe(this.debouncedStorePersistentPreferences));
+    this.addSearchCriterias(newCrits);
     this.clearTagSelection();
   }
 
   @action.bound replaceCriteriaWithTagSelection() {
     this.replaceSearchCriterias(
-      Array.from(
-        this.tagSelection,
-        (tag) => new ClientTagSearchCriteria(this.rootStore.tagStore, 'tags', tag.id),
-      ),
+      Array.from(this.tagSelection, (tag) => new ClientTagSearchCriteria('tags', tag.id)),
     );
     this.clearTagSelection();
   }
@@ -644,7 +704,9 @@ class UiStore {
   @action.bound replaceCriteriaItem(oldCrit: FileSearchCriteria, crit: FileSearchCriteria) {
     const index = this.searchCriteriaList.indexOf(oldCrit);
     if (index !== -1) {
+      this.searchCriteriaList[index].dispose();
       this.searchCriteriaList[index] = crit;
+      crit.observe(this.debouncedStorePersistentPreferences);
       this.viewQueryContent();
     }
   }
@@ -663,7 +725,7 @@ class UiStore {
   }
 
   @action.bound processGlobalShortCuts(e: KeyboardEvent) {
-    if ((e.target as HTMLElement).matches?.('input')) {
+    if ((e.target as HTMLElement | null)?.matches('input')) {
       return;
     }
     const combo = getKeyCombo(e);
@@ -688,7 +750,7 @@ class UiStore {
       e.preventDefault(); // prevent scrolling with space when opening the preview window
       // Search
     } else if (matches(hotkeyMap.search)) {
-      (document.querySelector('.searchbar input') as HTMLElement)?.focus();
+      (document.querySelector('.searchbar input') as HTMLElement).focus();
     } else if (matches(hotkeyMap.advancedSearch)) {
       this.toggleAdvancedSearch();
       // View
@@ -746,14 +808,24 @@ class UiStore {
     if (prefsString) {
       try {
         const prefs = JSON.parse(prefsString);
-        if (prefs.theme) this.setTheme(prefs.theme);
+        if (prefs.theme) {
+          this.setTheme(prefs.theme);
+        }
         this.setIsOutlinerOpen(prefs.isOutlinerOpen);
         this.isInspectorOpen = Boolean(prefs.isInspectorOpen);
-        if (prefs.thumbnailDirectory) this.setThumbnailDirectory(prefs.thumbnailDirectory);
-        if (prefs.importDirectory) this.setImportDirectory(prefs.importDirectory);
+        if (prefs.thumbnailDirectory) {
+          this.setThumbnailDirectory(prefs.thumbnailDirectory);
+        }
+        if (prefs.importDirectory) {
+          this.setImportDirectory(prefs.importDirectory);
+        }
         this.setMethod(Number(prefs.method));
-        if (prefs.thumbnailSize) this.setThumbnailSize(prefs.thumbnailSize);
-        if (prefs.thumbnailShape) this.setThumbnailShape(prefs.thumbnailShape);
+        if (prefs.thumbnailSize) {
+          this.setThumbnailSize(prefs.thumbnailSize);
+        }
+        if (prefs.thumbnailShape) {
+          this.setThumbnailShape(prefs.thumbnailShape);
+        }
         this.isThumbnailTagOverlayEnabled = Boolean(prefs.isThumbnailTagOverlayEnabled ?? true);
         this.isThumbnailFilenameOverlayEnabled = Boolean(
           prefs.isThumbnailFilenameOverlayEnabled ?? false,
@@ -763,7 +835,23 @@ class UiStore {
         Object.entries<string>(prefs.hotkeyMap).forEach(
           ([k, v]) => k in defaultHotkeyMap && (this.hotkeyMap[k as keyof IHotkeyMap] = v),
         );
-        console.info('recovered', prefs.hotkeyMap);
+
+        this.isRememberSearchEnabled = Boolean(prefs.isRememberSearchEnabled);
+        if (this.isRememberSearchEnabled) {
+          // If remember search criteria, restore the search criteria list...
+          const serializedCriteriaList: SearchCriteria<IFile>[] = JSON.parse(
+            prefs.searchCriteriaList || '[]',
+          );
+          const newCrits = serializedCriteriaList.map((c) => ClientBaseCriteria.deserialize(c));
+          this.searchCriteriaList.push(...newCrits);
+          newCrits.forEach((crit) => crit.observe(this.debouncedStorePersistentPreferences));
+
+          // and other content-related options. So it's just like you never closed Allusion!
+          this.firstItem = prefs.firstItem;
+          this.searchMatchAny = prefs.searchMatchAny;
+          this.isSlideMode = prefs.isSlideMode;
+        }
+        console.info('recovered', prefs);
       } catch (e) {
         console.error('Cannot parse persistent preferences', e);
       }
@@ -773,7 +861,7 @@ class UiStore {
 
     // Set default thumbnail directory in case none was specified
     if (this.thumbnailDirectory.length === 0) {
-      getDefaultThumbnailDirectory().then((defaultThumbDir) => {
+      RendererMessenger.getDefaultThumbnailDirectory().then((defaultThumbDir) => {
         this.setThumbnailDirectory(defaultThumbDir);
         fse.ensureDirSync(this.thumbnailDirectory);
       });
@@ -785,7 +873,17 @@ class UiStore {
     for (const field of PersistentPreferenceFields) {
       prefs[field] = this[field];
     }
+
+    // searchCriteriaList can't be observed; do it manually
+    prefs['searchCriteriaList'] = JSON.stringify(
+      this.searchCriteriaList.map((c) => c.serialize(this.rootStore)),
+    );
+
     localStorage.setItem(PREFERENCES_STORAGE_KEY, JSON.stringify(prefs));
+  }
+
+  clearPersistentPreferences() {
+    localStorage.removeItem(PREFERENCES_STORAGE_KEY);
   }
 
   /////////////////// Helper methods ///////////////////

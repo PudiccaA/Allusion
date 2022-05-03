@@ -1,30 +1,32 @@
 import { shell } from 'electron';
-import { action } from 'mobx';
+import { action, runInAction } from 'mobx';
 import { observer } from 'mobx-react-lite';
 import SysPath from 'path';
 import React, { useCallback, useContext, useEffect, useMemo, useState } from 'react';
 import { IFile } from 'src/entities/File';
 import { ClientLocation, ClientSubLocation } from 'src/entities/Location';
-import { ClientStringSearchCriteria, CustomKeyDict } from 'src/entities/SearchCriteria';
-import { Collapse } from 'src/frontend/components/Collapse';
+import { ClientStringSearchCriteria } from 'src/entities/SearchCriteria';
 import { LocationRemoval, SubLocationExclusion } from 'src/frontend/components/RemovalAlert';
 import { AppToaster } from 'src/frontend/components/Toaster';
 import DropContext from 'src/frontend/contexts/DropContext';
 import { useStore } from 'src/frontend/contexts/StoreContext';
-import { DnDAttribute } from 'src/frontend/contexts/TagDnDContext';
+import { DnDLocationType, useLocationDnD } from 'src/frontend/contexts/TagDnDContext';
 import { useAutorun } from 'src/frontend/hooks/mobx';
-import useContextMenu from 'src/frontend/hooks/useContextMenu';
 import LocationStore from 'src/frontend/stores/LocationStore';
+import { triggerContextMenuEvent, emptyFunction } from '../utils';
 import { RendererMessenger } from 'src/Messaging';
 import { IconSet, Tree } from 'widgets';
-import { ContextMenu, Menu, MenuDivider, MenuItem, Toolbar, ToolbarButton } from 'widgets/menus';
+import { Menu, MenuDivider, MenuItem, Toolbar, ToolbarButton, useContextMenu } from 'widgets/menus';
+import MultiSplitPane, { MultiSplitPaneProps } from 'widgets/MultiSplit/MultiSplitPane';
 import { Callout } from 'widgets/notifications';
 import { createBranchOnKeyDown, ITreeItem } from 'widgets/Tree';
 import { IExpansionState } from '../../types';
 import TreeItemRevealer from '../TreeItemRevealer';
-import { handleDragLeave, isAcceptableType, onDragOver, storeDroppedImage } from './dnd';
 import LocationCreationDialog from './LocationCreationDialog';
 import LocationRecoveryDialog from './LocationRecoveryDialog';
+import { createDragReorderHelper } from '../TreeItemDnD';
+import { useFileDropHandling } from './useFileDnD';
+import { onDragOver as onDragOverFileDnD } from './dnd';
 
 export class LocationTreeItemRevealer extends TreeItemRevealer {
   private locationStore?: LocationStore;
@@ -56,7 +58,9 @@ export class LocationTreeItemRevealer extends TreeItemRevealer {
       const match = loc.subLocations.find((child) =>
         absolutePath.startsWith(`${child.path}${SysPath.sep}`),
       );
-      if (loc instanceof ClientLocation) return match ? getSubLocationsToFile(match) : [];
+      if (loc instanceof ClientLocation) {
+        return match ? getSubLocationsToFile(match) : [];
+      }
       return match ? [loc, ...getSubLocationsToFile(match)] : [loc];
     };
 
@@ -74,7 +78,6 @@ const enum Tooltip {
 }
 
 interface ITreeData {
-  showContextMenu: (x: number, y: number, menu: JSX.Element) => void;
   expansion: IExpansionState;
   setExpansion: React.Dispatch<IExpansionState>;
   delete: (location: ClientLocation) => void;
@@ -90,34 +93,11 @@ const toggleExpansion = (nodeData: ClientLocation | ClientSubLocation, treeData:
 const isExpanded = (nodeData: ClientLocation | ClientSubLocation, treeData: ITreeData) =>
   treeData.expansion[nodeData instanceof ClientLocation ? nodeData.id : nodeData.path];
 
-// eslint-disable-next-line @typescript-eslint/no-empty-function
-const emptyFunction = () => {};
-
-const triggerContextMenuEvent = (event: React.KeyboardEvent<HTMLLIElement>) => {
-  const element = event.currentTarget.querySelector('.tree-content-label');
-  if (element !== null) {
-    event.stopPropagation();
-    const rect = element.getBoundingClientRect();
-    element.dispatchEvent(
-      new MouseEvent('contextmenu', {
-        clientX: rect.right,
-        clientY: rect.top,
-        bubbles: true,
-      }),
-    );
-  }
-};
-
 /** Add an additional / or \ in order to enforce files only in the specific directory are found, not in those starting with same name */
 const pathAsSearchPath = (path: string) => `${path}${SysPath.sep}`;
 
 const pathCriteria = (path: string) =>
-  new ClientStringSearchCriteria<IFile>(
-    'absolutePath',
-    pathAsSearchPath(path),
-    'startsWith',
-    CustomKeyDict,
-  );
+  new ClientStringSearchCriteria<IFile>('absolutePath', pathAsSearchPath(path), 'startsWith');
 
 const customKeys = (
   search: (path: string) => void,
@@ -167,10 +147,10 @@ const DirectoryMenu = observer(
 
     const handleOpenFileExplorer = useCallback(() => shell.showItemInFolder(path), [path]);
 
-    const handleAddToSearch = useCallback(() => uiStore.addSearchCriteria(pathCriteria(path)), [
-      path,
-      uiStore,
-    ]);
+    const handleAddToSearch = useCallback(
+      () => uiStore.addSearchCriteria(pathCriteria(path)),
+      [path, uiStore],
+    );
 
     const handleReplaceSearch = useCallback(
       () => uiStore.replaceSearchCriteria(pathCriteria(path)),
@@ -213,118 +193,45 @@ interface IContextMenuProps {
 const LocationTreeContextMenu = observer(({ location, onDelete, onExclude }: IContextMenuProps) => {
   const { uiStore } = useStore();
 
-  const openDeleteDialog = useCallback(() => location && onDelete(location), [location, onDelete]);
+  const openDeleteDialog = useCallback(() => onDelete(location), [location, onDelete]);
 
   if (location.isBroken) {
     return (
-      <>
+      <Menu>
         <MenuItem
           text="Open Recovery Panel"
           onClick={() => uiStore.openLocationRecovery(location.id)}
           icon={IconSet.WARNING_BROKEN_LINK}
         />
         <MenuItem text="Delete" onClick={openDeleteDialog} icon={IconSet.DELETE} />
-      </>
+      </Menu>
     );
   }
 
   return (
-    <>
+    <Menu>
       <DirectoryMenu location={location} onExclude={onExclude} />
       <MenuDivider />
       <MenuItem text="Delete" onClick={openDeleteDialog} icon={IconSet.DELETE} />
-    </>
+    </Menu>
   );
 });
-
-export const HOVER_TIME_TO_EXPAND = 600;
-
-const useFileDropHandling = (
-  expansionId: string,
-  fullPath: string,
-  expansion: IExpansionState,
-  setExpansion: (s: IExpansionState) => void,
-) => {
-  // Don't expand immediately, only after hovering over it for a second or so
-  const [expandTimeoutId, setExpandTimeoutId] = useState<number>();
-  const expandDelayed = useCallback(() => {
-    if (expandTimeoutId) clearTimeout(expandTimeoutId);
-    const t = window.setTimeout(() => {
-      setExpansion({ ...expansion, [expansionId]: true });
-    }, HOVER_TIME_TO_EXPAND);
-    setExpandTimeoutId(t);
-  }, [expandTimeoutId, expansion, expansionId, setExpansion]);
-
-  const handleDragEnter = useCallback(
-    (event: React.DragEvent<HTMLDivElement>) => {
-      event.stopPropagation();
-      event.preventDefault();
-      const canDrop = onDragOver(event);
-      if (canDrop && !expansion[expansionId]) {
-        expandDelayed();
-      }
-    },
-    [expansion, expansionId, expandDelayed],
-  );
-
-  const handleDrop = useCallback(
-    async (event: React.DragEvent<HTMLDivElement>) => {
-      event.currentTarget.dataset[DnDAttribute.Target] = 'false';
-
-      if (isAcceptableType(event)) {
-        event.dataTransfer.dropEffect = 'none';
-        try {
-          await storeDroppedImage(event, fullPath);
-        } catch (e) {
-          console.error(e);
-          AppToaster.show({
-            message: 'Something went wrong, could not import image :(',
-            timeout: 100,
-          });
-        }
-      } else {
-        AppToaster.show({ message: 'File type not supported :(', timeout: 100 });
-      }
-    },
-    [fullPath],
-  );
-
-  const handleDragLeaveWrapper = useCallback(
-    (event: React.DragEvent<HTMLDivElement>) => {
-      // Drag events are also triggered for children??
-      // We don't want to detect dragLeave of a child as a dragLeave of the target element, so return immmediately
-      if ((event.target as HTMLElement).contains(event.relatedTarget as HTMLElement)) return;
-
-      event.stopPropagation();
-      event.preventDefault();
-      handleDragLeave(event);
-      if (expandTimeoutId) {
-        clearTimeout(expandTimeoutId);
-        setExpandTimeoutId(undefined);
-      }
-    },
-    [expandTimeoutId],
-  );
-
-  return {
-    handleDragEnter,
-    handleDrop,
-    handleDragLeave: handleDragLeaveWrapper,
-  };
-};
 
 const SubLocation = observer((props: { nodeData: ClientSubLocation; treeData: ITreeData }) => {
   const { nodeData, treeData } = props;
   const { uiStore } = useStore();
-  const { showContextMenu, expansion, setExpansion } = treeData;
+  const { expansion, setExpansion } = treeData;
+  const show = useContextMenu();
   const handleContextMenu = useCallback(
     (e: React.MouseEvent) =>
-      showContextMenu(
+      show(
         e.clientX,
         e.clientY,
-        <DirectoryMenu location={nodeData} onExclude={treeData.exclude} />,
+        <Menu>
+          <DirectoryMenu location={nodeData} onExclude={treeData.exclude} />
+        </Menu>,
       ),
-    [nodeData, showContextMenu, treeData.exclude],
+    [nodeData, show, treeData.exclude],
   );
 
   const existingSearchCrit = uiStore.searchCriteriaList.find(
@@ -357,10 +264,9 @@ const SubLocation = observer((props: { nodeData: ClientSubLocation; treeData: IT
       onClick={handleClick}
       onContextMenu={handleContextMenu}
       onDragEnter={handleDragEnter}
+      onDragOver={onDragOverFileDnD}
       onDrop={handleDrop}
       onDragLeave={handleDragLeave}
-      // Note: onDragOver is not needed here, but need to preventDefault() for onDrop to work 🙃
-      onDragOver={onDragOver}
     >
       {!nodeData.isExcluded
         ? expansion[nodeData.path]
@@ -377,13 +283,16 @@ const SubLocation = observer((props: { nodeData: ClientSubLocation; treeData: IT
   );
 });
 
+const DnDHelper = createDragReorderHelper('locations-dnd-preview', DnDLocationType);
+
 const Location = observer(
   ({ nodeData, treeData }: { nodeData: ClientLocation; treeData: ITreeData }) => {
-    const { uiStore } = useStore();
-    const { showContextMenu, expansion, delete: onDelete } = treeData;
+    const { uiStore, locationStore } = useStore();
+    const { expansion, delete: onDelete } = treeData;
+    const show = useContextMenu();
     const handleContextMenu = useCallback(
       (event: React.MouseEvent<HTMLDivElement, MouseEvent>) => {
-        showContextMenu(
+        show(
           event.clientX,
           event.clientY,
           <LocationTreeContextMenu
@@ -393,14 +302,13 @@ const Location = observer(
           />,
         );
       },
-      [showContextMenu, nodeData, onDelete, treeData.exclude],
+      [show, nodeData, onDelete, treeData.exclude],
     );
 
     // TODO: idem
     const existingSearchCrit = uiStore.searchCriteriaList.find(
       (c: any) => c.value === pathAsSearchPath(nodeData.path),
     );
-    // const isSearched = Boolean(existingSearchCrit);
 
     const handleClick = useCallback(
       (event: React.MouseEvent<HTMLElement, MouseEvent>) => {
@@ -413,11 +321,68 @@ const Location = observer(
       [existingSearchCrit, nodeData.path, uiStore],
     );
 
-    const { handleDragEnter, handleDragLeave, handleDrop } = useFileDropHandling(
+    const fileDnD = useFileDropHandling(
       nodeData.id,
       nodeData.path,
       expansion,
       treeData.setExpansion,
+    );
+
+    const dndData = useLocationDnD();
+    const handleDragStart = useCallback(
+      (event: React.DragEvent<HTMLDivElement>) =>
+        runInAction(() =>
+          DnDHelper.onDragStart(event, nodeData.name, uiStore.theme, dndData, nodeData),
+        ),
+      [dndData, nodeData, uiStore],
+    );
+
+    const handleDragOver = useCallback(
+      (event: React.DragEvent<HTMLDivElement>) => {
+        const ignored = DnDHelper.onDragOver(event, dndData, false);
+        if (ignored) {
+          onDragOverFileDnD(event);
+        }
+      },
+      [dndData],
+    );
+
+    const handleDragLeave = useCallback(
+      (event: React.DragEvent<HTMLDivElement>) => {
+        runInAction(() => {
+          const ignored = DnDHelper.onDragLeave(event);
+          if (ignored) {
+            fileDnD.handleDragLeave(event);
+          }
+        });
+      },
+      [fileDnD],
+    );
+
+    const handleDrop = useCallback(
+      (event: React.DragEvent<HTMLDivElement>) => {
+        runInAction(() => {
+          if (!dndData.source || !event.dataTransfer.types.includes(DnDLocationType)) {
+            fileDnD.handleDrop(event);
+            return;
+          }
+          const relativeMovePos = DnDHelper.onDrop(event);
+
+          if (relativeMovePos === 'middle') {
+            // not possible for locations, no middle position allowed
+          } else {
+            let target = nodeData;
+            if (relativeMovePos === -1) {
+              const index = locationStore.locationList.indexOf(target) - 1;
+              if (index >= 0) {
+                target = locationStore.locationList[index];
+              }
+            }
+            locationStore.reorder(dndData.source, target);
+          }
+        });
+      },
+      [dndData.source, fileDnD, nodeData, locationStore],
     );
 
     return (
@@ -425,9 +390,12 @@ const Location = observer(
         className="tree-content-label"
         onClick={handleClick}
         onContextMenu={handleContextMenu}
-        onDragEnter={handleDragEnter}
-        onDrop={handleDrop}
+        draggable
+        onDragEnter={fileDnD.handleDragEnter}
+        onDragStart={handleDragStart}
+        onDragOver={handleDragOver}
         onDragLeave={handleDragLeave}
+        onDrop={handleDrop}
       >
         {nodeData.isInitialized && !nodeData.isRefreshing
           ? expansion[nodeData.id]
@@ -465,12 +433,11 @@ const LocationLabel = ({ nodeData, treeData }: { nodeData: any; treeData: any })
 );
 
 interface ILocationTreeProps {
-  showContextMenu: (x: number, y: number, menu: JSX.Element) => void;
   onDelete: (loc: ClientLocation) => void;
   onExclude: (loc: ClientSubLocation) => void;
 }
 
-const LocationsTree = ({ onDelete, onExclude, showContextMenu }: ILocationTreeProps) => {
+const LocationsTree = ({ onDelete, onExclude }: ILocationTreeProps) => {
   const { locationStore, uiStore } = useStore();
   const [expansion, setExpansion] = useState<IExpansionState>({});
   const treeData: ITreeData = useMemo<ITreeData>(
@@ -479,9 +446,8 @@ const LocationsTree = ({ onDelete, onExclude, showContextMenu }: ILocationTreePr
       setExpansion,
       delete: onDelete,
       exclude: onExclude,
-      showContextMenu,
     }),
-    [expansion, onDelete, onExclude, showContextMenu],
+    [expansion, onDelete, onExclude],
   );
   const [branches, setBranches] = useState<ITreeItem[]>([]);
 
@@ -516,9 +482,10 @@ const LocationsTree = ({ onDelete, onExclude, showContextMenu }: ILocationTreePr
   });
   // TODO: re-run when location (sub)-folder updates: add "lastUpdated" field to location, update when location watcher notices changes?
 
-  useEffect(() => LocationTreeItemRevealer.instance.initialize(setExpansion, locationStore), [
-    locationStore,
-  ]);
+  useEffect(
+    () => LocationTreeItemRevealer.instance.initialize(setExpansion, locationStore),
+    [locationStore],
+  );
 
   return (
     <Tree
@@ -533,20 +500,18 @@ const LocationsTree = ({ onDelete, onExclude, showContextMenu }: ILocationTreePr
   );
 };
 
-const LocationsPanel = observer(() => {
+const LocationsPanel = observer((props: Partial<MultiSplitPaneProps>) => {
   const { locationStore } = useStore();
-  const [contextState, { show, hide }] = useContextMenu();
 
   const [creatableLocation, setCreatableLocation] = useState<ClientLocation>();
   const [deletableLocation, setDeletableLocation] = useState<ClientLocation>();
   const [excludableSubLocation, setExcludableSubLocation] = useState<ClientSubLocation>();
-  const [isCollapsed, setCollapsed] = useState(false);
 
   // TODO: Offer option to replace child location(s) with the parent loc, so no data of imported images is lost
   const handleChooseWatchedDir = useCallback(async () => {
     let path: string;
     try {
-      const { filePaths } = await RendererMessenger.openDialog({
+      const { filePaths } = await RendererMessenger.showOpenDialog({
         properties: ['openDirectory'],
       });
       // multi-selection is disabled which means there can be at most 1 folder
@@ -560,12 +525,21 @@ const LocationsPanel = observer(() => {
       return;
     }
 
-    if (path === undefined) {
+    // Check if the new location already exists
+    const existingDir = locationStore.exists((dir) => path === dir.path);
+    if (existingDir) {
+      AppToaster.show({
+        message: 'This folder has already been added as a location.',
+        timeout: 5000,
+      });
       return;
     }
 
+    const addSeparator = (path: string) => (path.endsWith(SysPath.sep) ? path : path + SysPath.sep);
+
     // Check if the new location is a sub-directory of an existing location
-    const parentDir = locationStore.exists((dir) => path.includes(dir.path));
+    // add separator to prevent /foo/bar2 from being detected as parent directory of /foo/bar
+    const parentDir = locationStore.exists((dir) => path.includes(addSeparator(dir.path)));
     if (parentDir) {
       AppToaster.show({
         message: 'You cannot add a location that is a sub-folder of an existing location.',
@@ -575,7 +549,11 @@ const LocationsPanel = observer(() => {
     }
 
     // Check if the new location is a parent-directory of an existing location
-    const childDir = locationStore.exists((dir) => dir.path.includes(path));
+    // Need to add a separator at the end, otherwise the new path /foo is detected as a parent of existing location /football.
+    // - /foo/ is not a parent directory of /football
+    // - /foo/ is     a parent directory of /foo/bar
+    const pathWithSeparator = addSeparator(path);
+    const childDir = locationStore.exists((dir) => dir.path.includes(pathWithSeparator));
     if (childDir) {
       AppToaster.show({
         message: 'You cannot add a location that is a parent-folder of an existing location.',
@@ -591,12 +569,13 @@ const LocationsPanel = observer(() => {
   // Detect file dropping and show a blue outline around location panel
   const { isDropping } = useContext(DropContext);
 
+  // FIXME: something is broken with the isDropping detection. there was "isEmpty || isDropping" in here before
   return (
-    <div
-      className={`section ${isEmpty || isDropping ? 'attention' : ''} ${isDropping ? 'info' : ''}`}
-    >
-      <header>
-        <h2 onClick={() => setCollapsed(!isCollapsed)}>Locations</h2>
+    <MultiSplitPane
+      id="locations"
+      title="Locations"
+      className={`${isEmpty ? 'attention' : ''} ${isDropping ? 'info' : ''}`}
+      headerToolbar={
         <Toolbar controls="location-list" isCompact>
           {locationStore.locationList.length > 0 && (
             <ToolbarButton
@@ -617,15 +596,12 @@ const LocationsPanel = observer(() => {
             tooltip={Tooltip.Location}
           />
         </Toolbar>
-      </header>
-      <Collapse open={!isCollapsed}>
-        <LocationsTree
-          showContextMenu={show}
-          onDelete={setDeletableLocation}
-          onExclude={setExcludableSubLocation}
-        />
-        {isEmpty && <Callout icon={IconSet.INFO}>Click + to choose a location.</Callout>}
-      </Collapse>
+      }
+      {...props}
+    >
+      <LocationsTree onDelete={setDeletableLocation} onExclude={setExcludableSubLocation} />
+      {isEmpty && <Callout icon={IconSet.INFO}>Click + to choose a location.</Callout>}
+
       <LocationRecoveryDialog />
 
       {creatableLocation && (
@@ -646,16 +622,7 @@ const LocationsPanel = observer(() => {
           onClose={() => setExcludableSubLocation(undefined)}
         />
       )}
-      <ContextMenu
-        isOpen={contextState.open}
-        x={contextState.x}
-        y={contextState.y}
-        close={hide}
-        usePortal
-      >
-        <Menu>{contextState.menu}</Menu>
-      </ContextMenu>
-    </div>
+    </MultiSplitPane>
   );
 });
 

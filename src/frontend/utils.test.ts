@@ -1,4 +1,4 @@
-import { encodeFilePath } from './utils';
+import { encodeFilePath } from 'common/fs';
 
 describe('utils', () => {
   describe('encodeFilePath', () => {
@@ -17,7 +17,10 @@ describe('utils', () => {
       expect(encodeFilePath('C:/test/test.jpg?v=1')).toEqual('file://C:/test/test.jpg?v=1');
     });
     it('should encode paths with octothorp (#) correctly', () => {
+      // Filename
       expect(encodeFilePath('C:/test/test#.jpg')).toEqual('file://C:/test/test%23.jpg');
+      // Also in path
+      expect(encodeFilePath('C:/test#/test.jpg')).toEqual('file://C:/test%23/test.jpg');
     });
   });
 });

@@ -6,7 +6,7 @@ import FileTags from '../../components/FileTag';
 import ImageInfo from '../../components/ImageInfo';
 import { IconButton, IconSet } from 'widgets';
 import { shell } from 'electron';
-import { IS_PREVIEW_WINDOW } from 'src/renderer';
+import { IS_PREVIEW_WINDOW } from 'common/window';
 
 const Inspector = observer(() => {
   const { uiStore, fileStore } = useStore();
@@ -25,9 +25,6 @@ const Inspector = observer(() => {
   return (
     <aside id="inspector">
       <section>
-        <header>
-          <h2>Information</h2>
-        </header>
         <ImageInfo file={first} />
       </section>
       <section>

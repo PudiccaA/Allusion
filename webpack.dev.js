@@ -63,6 +63,7 @@ let rendererConfig = {
   resolve: {
     extensions: ['.js', '.json', '.ts', '.tsx', '.svg', '.wasm'],
     alias: {
+      common: path.resolve(__dirname, 'common/'),
       widgets: path.resolve(__dirname, 'widgets/'),
       resources: path.resolve(__dirname, 'resources/'),
       src: path.resolve(__dirname, 'src/'),
@@ -82,7 +83,7 @@ let rendererConfig = {
         exclude: /\.module\.scss$/,
         use: [
           'style-loader',
-          'css-loader?sourceMap',
+          { loader: 'css-loader', options: { sourceMap: true } },
           { loader: 'sass-loader', options: { sourceMap: true } },
         ],
       },
@@ -110,10 +111,6 @@ let rendererConfig = {
       {
         test: /\.wasm$/,
         type: 'asset/resource',
-      },
-      {
-        test: /.node$/,
-        loader: 'node-loader',
       },
       {
         test: /\.js$/,

@@ -1,12 +1,16 @@
-import React from 'react';
+import React, { useEffect, useState } from 'react';
 import { observer } from 'mobx-react-lite';
 import LOGO_FC from 'resources/logo/svg/full-color/allusion-logomark-fc.svg';
+import { IS_PREVIEW_WINDOW } from 'common/window';
 
 import { useStore } from '../../contexts/StoreContext';
 
 const Placeholder = observer(() => {
   const { fileStore, tagStore } = useStore();
 
+  if (IS_PREVIEW_WINDOW) {
+    return <PreviewWindowPlaceholder />;
+  }
   if (fileStore.showsAllContent && tagStore.isEmpty) {
     // No tags exist, and no images added: Assuming it's a new user -> Show a welcome screen
     return <Welcome />;
@@ -26,6 +30,47 @@ const Placeholder = observer(() => {
 export default Placeholder;
 
 import { IconSet, Button, ButtonGroup, SVG } from 'widgets';
+import { RendererMessenger } from 'src/Messaging';
+import useMountState from 'src/frontend/hooks/useMountState';
+
+const PreviewWindowPlaceholder = observer(() => {
+  const { fileStore } = useStore();
+  const [isLoading, setIsLoading] = useState(true);
+  const [, isMounted] = useMountState();
+  useEffect(() => {
+    setIsLoading(true);
+    setTimeout(() => {
+      if (isMounted.current) {
+        setIsLoading(false);
+      }
+    }, 1000);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [fileStore.fileListLastModified]);
+
+  if (isLoading) {
+    return (
+      <ContentPlaceholder title="Loading..." icon={<SVG src={LOGO_FC} />}>
+        {IconSet.LOADING}
+      </ContentPlaceholder>
+    );
+  }
+
+  // There should always be images to preview.
+  // If the placeholder is shown, something went wrong (probably the DB of the preview window is out of sync with the main window)
+  return (
+    <ContentPlaceholder title="That's not supposed to happen..." icon={<SVG src={LOGO_FC} />}>
+      <p>Something went wrong while previewing the selected images</p>
+
+      <div className="divider" />
+
+      <Button
+        styling="outlined"
+        text="Reload Allusion"
+        onClick={() => RendererMessenger.reload()}
+      />
+    </ContentPlaceholder>
+  );
+});
 
 const Welcome = () => {
   const { uiStore } = useStore();
@@ -71,6 +116,7 @@ const NoQueryContent = () => {
   return (
     <ContentPlaceholder title="No images found" icon={IconSet.SEARCH}>
       <p>Try searching for something else.</p>
+      {/* TODO: when search includes a Hidden tag, remind the user that's what might be causing them to see no results */}
       <ButtonGroup align="center">
         <Button
           text="All images"

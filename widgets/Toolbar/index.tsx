@@ -62,6 +62,7 @@ interface ToolbarButtonProps {
   pressed?: boolean;
   checked?: boolean;
   controls?: string;
+  type?: 'button' | 'submit' | 'reset';
 }
 
 const ToolbarButton = (props: ToolbarButtonProps) => {
@@ -77,6 +78,7 @@ const ToolbarButton = (props: ToolbarButtonProps) => {
     isCollapsible = true,
     controls,
     tabIndex,
+    type,
   } = props;
   return (
     <button
@@ -90,6 +92,7 @@ const ToolbarButton = (props: ToolbarButtonProps) => {
       aria-controls={controls}
       tabIndex={tabIndex} // FIXME: Implement toolbar keyboard navigation.
       data-tooltip={tooltip ?? text}
+      type={type}
     >
       <span className="btn-content-icon" aria-hidden>
         {icon}
@@ -99,7 +102,6 @@ const ToolbarButton = (props: ToolbarButtonProps) => {
   );
 };
 
-import { MenuButton } from './MenuButton';
 import { ToolbarSegment, ToolbarSegmentButton } from './ToolbarSegment';
 
-export { Toolbar, ToolbarButton, MenuButton, ToolbarSegment, ToolbarSegmentButton };
+export { Toolbar, ToolbarButton, ToolbarSegment, ToolbarSegmentButton };

@@ -1,9 +1,9 @@
+import { app } from 'electron';
+import fse from 'fs-extra';
 import http, { Server } from 'http';
 import path from 'path';
-import fse from 'fs-extra';
-import { app } from 'electron';
-
-import { SERVER_PORT } from '../config';
+import ExifIO from '../../common/ExifIO';
+import { SERVER_PORT } from '../../common/config';
 import { ITag } from '../entities/Tag';
 
 /**
@@ -39,8 +39,8 @@ class ClipServer {
     let filePath = path.join(directory, sanitzedFilename);
 
     const dotIndex = sanitzedFilename.lastIndexOf('.');
-    const baseFilename = sanitzedFilename.substr(0, dotIndex);
-    const ext = sanitzedFilename.substr(dotIndex + 1);
+    const baseFilename = sanitzedFilename.slice(0, dotIndex);
+    const ext = sanitzedFilename.slice(dotIndex + 1);
 
     function addCountToFilename(num: number) {
       return path.join(directory, `${baseFilename} ${num}.${ext}`);
@@ -153,11 +153,20 @@ class ClipServer {
     return downloadPath;
   }
 
-  async storeAndImportImage(directory: string, filename: string, imgBase64: string) {
+  async storeAndImportImage(
+    directory: string,
+    filename: string,
+    imgBase64: string,
+    pageUrl?: string,
+  ) {
     const downloadPath = await ClipServer.createDownloadPath(directory, filename);
     console.log('Downloading to', downloadPath);
 
     await this.storeImage(directory, downloadPath, imgBase64);
+
+    if (pageUrl) {
+      await this.storeExifData(downloadPath, pageUrl);
+    }
 
     const item: IImportItem = {
       filePath: downloadPath,
@@ -165,9 +174,30 @@ class ClipServer {
       dateAdded: new Date(),
     };
 
+    // Import into the database: front-end needs to be running
     const isImported = await this.importImage(item);
     if (!isImported) {
       await this.enqueue(item);
+    }
+  }
+
+  private async storeExifData(filepath: string, pageUrl: string) {
+    const exifIO = new ExifIO();
+    try {
+      await exifIO.initialize();
+
+      await exifIO.writeData(
+        filepath,
+        {
+          // CreatorWorkURL is intended for the profile page, there is no better alterative to store the page url on afaik
+          CreatorWorkURL: pageUrl,
+        },
+        { onlyIfUndefined: true },
+      );
+    } catch (e) {
+      console.error('Could not store exif data on imported image', e);
+    } finally {
+      await exifIO.close();
     }
   }
 
@@ -184,10 +214,11 @@ class ClipServer {
               // Check what kind of message has been sent
               if (req.url && req.url.endsWith('import-image')) {
                 const directory = this.preferences.importLocation;
-                const { filename, imgBase64 } = JSON.parse(body);
+                const { filename, imgBase64, pageUrl } = JSON.parse(body);
                 console.log('Received file', filename);
 
-                await this.storeAndImportImage(directory, filename, imgBase64);
+                await this.storeAndImportImage(directory, filename, imgBase64, pageUrl);
+
                 res.write(JSON.stringify({ message: 'OK!' }));
                 res.end();
               } else if (req.url && req.url.endsWith('/set-tags')) {
@@ -252,7 +283,7 @@ class ClipServer {
   }
 
   private async storeImage(directory: string, downloadPath: string, imgBase64: string) {
-    const rawData = imgBase64.substr(imgBase64.indexOf(',') + 1); // remove base64 header
+    const rawData = imgBase64.slice(imgBase64.indexOf(',') + 1); // remove base64 header
     await fse.mkdirs(directory);
     await fse.writeFile(downloadPath, rawData, 'base64');
   }

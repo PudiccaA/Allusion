@@ -6,10 +6,10 @@ import { useStore } from './contexts/StoreContext';
 import ErrorBoundary from './containers/ErrorBoundary';
 import ContentView from './containers/ContentView';
 import { IconSet, Toggle } from 'widgets';
-import { Toolbar, ToolbarButton } from 'widgets/menus';
+import { ContextMenuLayer, Toolbar, ToolbarButton } from 'widgets/menus';
 
 import { useWorkerListener } from './image/ThumbnailGeneration';
-import { Tooltip } from './containers/AppToolbar/PrimaryCommands';
+import SplashScreen from './containers/SplashScreen';
 
 const PreviewApp = observer(() => {
   const { uiStore, fileStore } = useStore();
@@ -35,6 +35,10 @@ const PreviewApp = observer(() => {
     setIsInitializing(true);
     setTimeout(() => setIsInitializing(false), 1000);
   }, [fileStore.fileListLastModified]);
+
+  if (!uiStore.isInitialized) {
+    return <SplashScreen />;
+  }
 
   return (
     <div
@@ -68,12 +72,14 @@ const PreviewApp = observer(() => {
             icon={IconSet.INFO}
             onClick={uiStore.toggleInspector}
             checked={uiStore.isInspectorOpen}
-            text={Tooltip.Inspector}
-            tooltip={Tooltip.Inspector}
+            text="Toggle the inspector panel"
+            tooltip="Toggle the inspector panel"
           />
         </Toolbar>
 
-        <ContentView />
+        <ContextMenuLayer>
+          <ContentView />
+        </ContextMenuLayer>
       </ErrorBoundary>
     </div>
   );

@@ -1,23 +1,23 @@
+import { formatTagCountText } from 'common/fmt';
 import { action, runInAction } from 'mobx';
 import { observer } from 'mobx-react-lite';
 import React, { useCallback, useEffect, useMemo, useReducer, useRef, useState } from 'react';
 import { ClientTagSearchCriteria } from 'src/entities/SearchCriteria';
 import { ClientTag, ROOT_TAG_ID } from 'src/entities/Tag';
-import { Collapse } from 'src/frontend/components/Collapse';
 import { TagRemoval } from 'src/frontend/components/RemovalAlert';
 import { TagMerge } from 'src/frontend/containers/Outliner/TagsPanel/TagMerge';
 import { useStore } from 'src/frontend/contexts/StoreContext';
-import { DnDAttribute, DnDTagType, useTagDnD } from 'src/frontend/contexts/TagDnDContext';
+import { DnDTagType, useTagDnD } from 'src/frontend/contexts/TagDnDContext';
 import { useAction } from 'src/frontend/hooks/mobx';
-import useContextMenu from 'src/frontend/hooks/useContextMenu';
 import TagStore from 'src/frontend/stores/TagStore';
 import UiStore from 'src/frontend/stores/UiStore';
-import { formatTagCountText } from 'src/frontend/utils';
 import { IconSet, Tree } from 'widgets';
-import { ContextMenu, Toolbar, ToolbarButton } from 'widgets/menus';
+import { Toolbar, ToolbarButton, useContextMenu } from 'widgets/menus';
+import MultiSplitPane, { MultiSplitPaneProps } from 'widgets/MultiSplit/MultiSplitPane';
 import { createBranchOnKeyDown, createLeafOnKeyDown, ITreeItem, TreeLabel } from 'widgets/Tree';
 import { IExpansionState } from '../../types';
-import { HOVER_TIME_TO_EXPAND } from '../LocationsPanel';
+import { HOVER_TIME_TO_EXPAND } from '../LocationsPanel/useFileDnD';
+import { createDragReorderHelper } from '../TreeItemDnD';
 import TreeItemRevealer from '../TreeItemRevealer';
 import { TagItemContextMenu } from './ContextMenu';
 import SearchButton from './SearchButton';
@@ -35,8 +35,9 @@ export class TagsTreeItemRevealer extends TreeItemRevealer {
   }
 
   revealTag(tag: ClientTag) {
-    const tagsToExpand = tag.treePath;
-    this.revealTreeItem([ROOT_TAG_ID, ...tagsToExpand.map((t) => t.id)]);
+    const tagsToExpand = Array.from(tag.getAncestors(), (t) => t.id);
+    tagsToExpand.push(ROOT_TAG_ID);
+    this.revealTreeItem(tagsToExpand);
   }
 }
 
@@ -85,7 +86,6 @@ const Label = (props: ILabelProps) =>
   );
 
 interface ITagItemProps {
-  showContextMenu: (x: number, y: number, menu: JSX.Element) => void;
   nodeData: ClientTag;
   dispatch: React.Dispatch<Action>;
   isEditing: boolean;
@@ -102,11 +102,11 @@ interface ITagItemProps {
  * query. Handling filter mode or replacing the search criteria list is up to
  * the component.
  */
-const toggleQuery = (nodeData: ClientTag, uiStore: UiStore, tagStore: TagStore) => {
+const toggleQuery = (nodeData: ClientTag, uiStore: UiStore) => {
   if (nodeData.isSearched) {
     // if it already exists, then remove it
     const alreadySearchedCrit = uiStore.searchCriteriaList.find((c) =>
-      (c as ClientTagSearchCriteria<any>)?.value?.includes(nodeData.id),
+      (c as ClientTagSearchCriteria<any>).value?.includes(nodeData.id),
     );
     if (alreadySearchedCrit) {
       uiStore.replaceSearchCriterias(
@@ -114,28 +114,26 @@ const toggleQuery = (nodeData: ClientTag, uiStore: UiStore, tagStore: TagStore) 
       );
     }
   } else {
-    uiStore.addSearchCriteria(new ClientTagSearchCriteria(tagStore, 'tags', nodeData.id));
+    uiStore.addSearchCriteria(new ClientTagSearchCriteria('tags', nodeData.id));
   }
 };
 
-const PreviewTag = document.createElement('span');
-PreviewTag.style.position = 'absolute';
-PreviewTag.style.top = '-100vh';
-document.body.appendChild(PreviewTag);
+const DnDHelper = createDragReorderHelper('tag-dnd-preview', DnDTagType);
 
 const TagItem = observer((props: ITagItemProps) => {
-  const { nodeData, dispatch, expansion, isEditing, submit, pos, select, showContextMenu } = props;
-  const { uiStore, tagStore } = useStore();
+  const { nodeData, dispatch, expansion, isEditing, submit, pos, select } = props;
+  const { uiStore } = useStore();
   const dndData = useTagDnD();
 
+  const show = useContextMenu();
   const handleContextMenu = useCallback(
     (e) =>
-      showContextMenu(
+      show(
         e.clientX,
         e.clientY,
         <TagItemContextMenu dispatch={dispatch} tag={nodeData} pos={pos} />,
       ),
-    [dispatch, nodeData, pos, showContextMenu],
+    [dispatch, nodeData, pos, show],
   );
 
   const handleDragStart = useCallback(
@@ -153,14 +151,7 @@ const TagItem = observer((props: ITagItemProps) => {
             }
           }
         }
-        PreviewTag.classList.value = `tag ${uiStore.theme}`;
-        PreviewTag.innerText = name;
-        event.dataTransfer.setData(DnDTagType, nodeData.id);
-        event.dataTransfer.setDragImage(PreviewTag, 0, 0);
-        event.dataTransfer.effectAllowed = 'linkMove';
-        event.dataTransfer.dropEffect = 'move';
-        event.currentTarget.dataset[DnDAttribute.Source] = 'true';
-        dndData.source = nodeData;
+        DnDHelper.onDragStart(event, name, uiStore.theme, dndData, nodeData);
       });
     },
     [dndData, nodeData, uiStore],
@@ -170,7 +161,9 @@ const TagItem = observer((props: ITagItemProps) => {
   const [expandTimeoutId, setExpandTimeoutId] = useState<number>();
   const expandDelayed = useCallback(
     (nodeId: string) => {
-      if (expandTimeoutId) clearTimeout(expandTimeoutId);
+      if (expandTimeoutId) {
+        clearTimeout(expandTimeoutId);
+      }
       const t = window.setTimeout(() => {
         dispatch(Factory.expandNode(nodeId));
       }, HOVER_TIME_TO_EXPAND);
@@ -182,38 +175,16 @@ const TagItem = observer((props: ITagItemProps) => {
   const handleDragOver = useCallback(
     (event: React.DragEvent<HTMLDivElement>) => {
       runInAction(() => {
-        if (dndData.source === undefined) {
-          return;
-        }
-        const dropTarget = event.currentTarget;
-        const isSource = dropTarget.dataset[DnDAttribute.Source] === 'true';
         if (
-          isSource ||
-          (dndData.source.isSelected && nodeData.isSelected) ||
-          nodeData.isAncestor(dndData.source)
+          (dndData.source?.isSelected && nodeData.isSelected) ||
+          nodeData.isAncestor(dndData.source!)
         ) {
           return;
         }
 
-        event.dataTransfer.dropEffect = 'move';
-        event.preventDefault();
-        event.stopPropagation();
-        dropTarget.dataset[DnDAttribute.Target] = 'true';
-        const posY = event.clientY;
-        const rect = dropTarget.getBoundingClientRect();
-        const [top, bottom] = [rect.top + 8, rect.bottom - 8];
-        if (posY <= top) {
-          dropTarget.classList.add('top');
-          dropTarget.classList.remove('center');
-          dropTarget.classList.remove('bottom');
-        } else if (posY >= bottom) {
-          dropTarget.classList.add('bottom');
-          dropTarget.classList.remove('center');
-          dropTarget.classList.remove('top');
-        } else {
-          dropTarget.classList.remove('top');
-          dropTarget.classList.add('center');
-          dropTarget.classList.remove('bottom');
+        const isIgnored = DnDHelper.onDragOver(event, dndData);
+        if (isIgnored) {
+          return;
         }
 
         // Don't expand when hovering over top/bottom border
@@ -234,12 +205,8 @@ const TagItem = observer((props: ITagItemProps) => {
   const handleDragLeave = useCallback(
     (event: React.DragEvent<HTMLDivElement>) => {
       if (runInAction(() => dndData.source !== undefined)) {
-        event.dataTransfer.dropEffect = 'none';
-        event.preventDefault();
-        event.stopPropagation();
-        event.currentTarget.dataset[DnDAttribute.Target] = 'false';
-        event.currentTarget.classList.remove('top');
-        event.currentTarget.classList.remove('bottom');
+        DnDHelper.onDragLeave(event);
+
         if (expandTimeoutId) {
           clearTimeout(expandTimeoutId);
           setExpandTimeoutId(undefined);
@@ -252,13 +219,7 @@ const TagItem = observer((props: ITagItemProps) => {
   const handleDrop = useCallback(
     (event: React.DragEvent<HTMLDivElement>) => {
       runInAction(() => {
-        const targetClasses = event.currentTarget.classList;
-        // Checker whether to move the dropped tag(s) into or above/below the drop target
-        const relativeMovePos = targetClasses.contains('top')
-          ? -1
-          : targetClasses.contains('bottom')
-          ? 0
-          : 'middle'; // Not dragged at top or bottom, but in middle
+        const relativeMovePos = DnDHelper.onDrop(event);
 
         // Expand the tag if it's not already expanded
         if (!expansion[nodeData.id]) {
@@ -280,15 +241,13 @@ const TagItem = observer((props: ITagItemProps) => {
           }
         }
       });
-      event.currentTarget.dataset[DnDAttribute.Target] = 'false';
-      event.currentTarget.classList.remove('top');
-      event.currentTarget.classList.remove('bottom');
+
       if (expandTimeoutId) {
         clearTimeout(expandTimeoutId);
         setExpandTimeoutId(undefined);
       }
     },
-    [dndData, expandTimeoutId, nodeData, pos, uiStore],
+    [dispatch, dndData, expandTimeoutId, expansion, nodeData, pos, uiStore],
   );
 
   const handleSelect = useCallback(
@@ -306,31 +265,29 @@ const TagItem = observer((props: ITagItemProps) => {
         if (nodeData.isSearched) {
           // if already searched, un-search
           const crit = uiStore.searchCriteriaList.find(
-            (c) => c instanceof ClientTagSearchCriteria && c.value.includes(nodeData.id),
+            (c) => c instanceof ClientTagSearchCriteria && c.value === nodeData.id,
           );
           if (crit) {
             uiStore.removeSearchCriteria(crit);
           }
         } else {
           // otherwise, search it
-          const query = new ClientTagSearchCriteria(tagStore, 'tags', nodeData.id, nodeData.name);
+          const query = new ClientTagSearchCriteria('tags', nodeData.id, 'containsRecursively');
           if (event.ctrlKey || event.metaKey) {
-            if (!nodeData.isSearched) {
-              uiStore.addSearchCriteria(query);
-            }
+            uiStore.addSearchCriteria(query);
           } else {
             uiStore.replaceSearchCriteria(query);
           }
         }
       });
     },
-    [nodeData, tagStore, uiStore],
+    [nodeData, uiStore],
   );
 
-  const handleRename = useCallback(() => dispatch(Factory.enableEditing(nodeData.id)), [
-    dispatch,
-    nodeData.id,
-  ]);
+  const handleRename = useCallback(
+    () => dispatch(Factory.enableEditing(nodeData.id)),
+    [dispatch, nodeData.id],
+  );
 
   useEffect(
     () =>
@@ -361,7 +318,7 @@ const TagItem = observer((props: ITagItemProps) => {
         setText={nodeData.rename}
         isEditing={isEditing}
         onSubmit={submit}
-        tooltip={`${nodeData.treePath.map((t) => t.name).join(' › ')} (${nodeData.fileCount})`}
+        tooltip={`${nodeData.path.join(' › ')} (${nodeData.fileCount})`}
       />
       {!isEditing && <SearchButton onClick={handleQuickQuery} isSearched={nodeData.isSearched} />}
     </div>
@@ -369,7 +326,6 @@ const TagItem = observer((props: ITagItemProps) => {
 });
 
 interface ITreeData {
-  showContextMenu: (x: number, y: number, menu: JSX.Element) => void;
   state: State;
   dispatch: React.Dispatch<Action>;
   submit: (target: EventTarget & HTMLInputElement) => void;
@@ -386,7 +342,6 @@ const TagItemLabel: TreeLabel = ({
   pos: number;
 }) => (
   <TagItem
-    showContextMenu={treeData.showContextMenu}
     nodeData={nodeData}
     dispatch={treeData.dispatch}
     expansion={treeData.state.expansion}
@@ -444,7 +399,7 @@ const customKeys = (
 
     case 'Enter':
       event.stopPropagation();
-      toggleQuery(nodeData, uiStore, tagStore);
+      toggleQuery(nodeData, uiStore);
       break;
 
     case 'Delete':
@@ -470,7 +425,7 @@ const mapTag = (tag: ClientTag): ITreeItem => ({
   className: tag.isSearched ? 'searched' : undefined,
 });
 
-const TagsTree = observer(() => {
+const TagsTree = observer((props: Partial<MultiSplitPaneProps>) => {
   const { tagStore, uiStore } = useStore();
   const root = tagStore.root;
   const [state, dispatch] = useReducer(reducer, {
@@ -479,7 +434,6 @@ const TagsTree = observer(() => {
     deletableNode: undefined,
     mergableNode: undefined,
   });
-  const [contextState, { show, hide }] = useContextMenu();
   const dndData = useTagDnD();
 
   /** Header and Footer drop zones of the root node */
@@ -535,7 +489,7 @@ const TagsTree = observer(() => {
     } else {
       if (selectedTag.isSelected && uiStore.tagSelection.size === 1) {
         uiStore.clearTagSelection();
-        (document.activeElement as HTMLElement)?.blur?.();
+        (document.activeElement as HTMLElement | null)?.blur();
       } else {
         uiStore.selectTag(selectedTag, true);
       }
@@ -545,16 +499,13 @@ const TagsTree = observer(() => {
 
   const treeData: ITreeData = useMemo(
     () => ({
-      showContextMenu: show,
       state,
       dispatch,
       submit: submit.current,
       select,
     }),
-    [select, show, state],
+    [select, state],
   );
-
-  const [isCollapsed, setIsCollapsed] = useState(false);
 
   const handleRootAddTag = useAction(() =>
     tagStore
@@ -596,22 +547,27 @@ const TagsTree = observer(() => {
       ),
   );
 
-  const handleKeyDown = useAction((e: React.KeyboardEvent) => {
+  const handleKeyDown = useAction((e: React.KeyboardEvent<HTMLDivElement>) => {
     if (e.key === 'Escape') {
       uiStore.clearTagSelection();
-      (document.activeElement as HTMLElement)?.blur?.();
+      (document.activeElement as HTMLElement | null)?.blur();
       e.stopPropagation();
+    } else {
+      props.onKeyDown?.(e);
     }
   });
 
   return (
-    <div onKeyDown={handleKeyDown}>
-      <header
-        onDragOver={handleDragOverAndLeave}
-        onDragLeave={handleDragOverAndLeave}
-        onDrop={handleDrop}
-      >
-        <h2 onClick={() => setIsCollapsed(!isCollapsed)}>Tags</h2>
+    <MultiSplitPane
+      id="tags"
+      title="Tags"
+      onKeyDown={handleKeyDown}
+      headerProps={{
+        onDragOver: handleDragOverAndLeave,
+        onDragLeave: handleDragOverAndLeave,
+        onDrop: handleDrop,
+      }}
+      headerToolbar={
         <Toolbar controls="tag-hierarchy" isCompact>
           {uiStore.tagSelection.size > 0 ? (
             <ToolbarButton
@@ -629,28 +585,27 @@ const TagsTree = observer(() => {
             />
           )}
         </Toolbar>
-      </header>
-
-      <Collapse open={!isCollapsed}>
-        {root.subTags.length === 0 ? (
-          <div className="tree-content-label" style={{ padding: '0.25rem' }}>
-            {/* <span className="pre-icon">{IconSet.INFO}</span> */}
-            {/* No tags or collections created yet */}
-            <i style={{ marginLeft: '1em' }}>None</i>
-          </div>
-        ) : (
-          <Tree
-            multiSelect
-            id="tag-hierarchy"
-            className={uiStore.tagSelection.size > 0 ? 'selected' : undefined}
-            children={root.subTags.map(mapTag)}
-            treeData={treeData}
-            toggleExpansion={toggleExpansion}
-            onBranchKeyDown={handleBranchOnKeyDown}
-            onLeafKeyDown={handleLeafOnKeyDown}
-          />
-        )}
-      </Collapse>
+      }
+      {...props}
+    >
+      {root.subTags.length === 0 ? (
+        <div className="tree-content-label" style={{ padding: '0.25rem' }}>
+          {/* <span className="pre-icon">{IconSet.INFO}</span> */}
+          {/* No tags or collections created yet */}
+          <i style={{ marginLeft: '1em' }}>None</i>
+        </div>
+      ) : (
+        <Tree
+          multiSelect
+          id="tag-hierarchy"
+          className={uiStore.tagSelection.size > 0 ? 'selected' : undefined}
+          children={root.subTags.map(mapTag)}
+          treeData={treeData}
+          toggleExpansion={toggleExpansion}
+          onBranchKeyDown={handleBranchOnKeyDown}
+          onLeafKeyDown={handleLeafOnKeyDown}
+        />
+      )}
 
       {/* Used for dragging collection to root of hierarchy and for deselecting tag selection */}
       <div
@@ -671,17 +626,7 @@ const TagsTree = observer(() => {
       {state.mergableNode && (
         <TagMerge tag={state.mergableNode} onClose={() => dispatch(Factory.abortMerge())} />
       )}
-
-      <ContextMenu
-        isOpen={contextState.open}
-        x={contextState.x}
-        y={contextState.y}
-        close={hide}
-        usePortal
-      >
-        {contextState.menu}
-      </ContextMenu>
-    </div>
+    </MultiSplitPane>
   );
 });
 

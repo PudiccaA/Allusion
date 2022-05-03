@@ -19,7 +19,9 @@ const PopupWindow: React.FC<IPopupWindowProps> = (props) => {
 
   useEffect(() => {
     const externalWindow = window.open('', props.windowName);
-    if (!externalWindow) throw new Error('External window not supported!');
+    if (!externalWindow) {
+      throw new Error('External window not supported!');
+    }
     setWin(externalWindow);
 
     externalWindow.document.body.appendChild(containerEl);
@@ -27,6 +29,11 @@ const PopupWindow: React.FC<IPopupWindowProps> = (props) => {
     // Copy style sheets from main window
     copyStyles(document, externalWindow.document);
     containerEl.setAttribute('data-os', PLATFORM);
+
+    // Hacky func for re-applying CSS to settings when changing that of the main window
+    (window as any).reapplyPopupStyles = () => {
+      copyStyles(document, externalWindow.document);
+    };
 
     externalWindow.addEventListener('beforeunload', props.onClose);
 
@@ -39,7 +46,7 @@ const PopupWindow: React.FC<IPopupWindowProps> = (props) => {
     }
 
     return function cleanup() {
-      externalWindow?.close();
+      externalWindow.close();
       setWin(undefined);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -48,7 +55,8 @@ const PopupWindow: React.FC<IPopupWindowProps> = (props) => {
   if (win) {
     return ReactDOM.createPortal(
       <>
-        {props.children} <Overlay document={win.document} />
+        {props.children}
+        <Overlay document={win.document} />
       </>,
       containerEl,
     );
@@ -59,6 +67,11 @@ const PopupWindow: React.FC<IPopupWindowProps> = (props) => {
 export default PopupWindow;
 
 function copyStyles(sourceDoc: Document, targetDoc: Document) {
+  // First clear any existing styles
+  ['style', 'link'].forEach((t) =>
+    Array.from(targetDoc.getElementsByTagName(t)).forEach((i) => i.parentElement?.removeChild(i)),
+  );
+
   for (let i = 0; i < sourceDoc.styleSheets.length; i++) {
     const styleSheet = sourceDoc.styleSheets[i];
     // production mode bundles CSS in one file
@@ -68,7 +81,7 @@ function copyStyles(sourceDoc: Document, targetDoc: Document) {
       linkElement.href = styleSheet.href;
       targetDoc.head.appendChild(linkElement);
       // development mode injects style elements for CSS
-    } else if (styleSheet.cssRules) {
+    } else if (styleSheet.cssRules.length > 0) {
       const styleElement = targetDoc.createElement('style');
       for (let i = 0; i < styleSheet.cssRules.length; i++) {
         const cssRule = styleSheet.cssRules[i];

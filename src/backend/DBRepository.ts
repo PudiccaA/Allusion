@@ -1,4 +1,5 @@
-import Dexie, { Transaction, WhereClause } from 'dexie';
+import Dexie, { IndexableType, Transaction, WhereClause } from 'dexie';
+import { shuffleArray } from 'common/core';
 
 import { ID, IResource } from '../entities/ID';
 import {
@@ -19,7 +20,7 @@ export interface IDBCollectionConfig {
 export interface IDBVersioningConfig {
   version: number;
   collections: IDBCollectionConfig[];
-  upgrade?: (tx: Transaction) => void;
+  upgrade?: (tx: Transaction) => void | Promise<void>;
 }
 
 /**
@@ -30,14 +31,15 @@ export const dbInit = (configs: IDBVersioningConfig[], dbName: string): Dexie =>
   const db = new Dexie(dbName);
 
   // Initialize for each DB version: https://dexie.org/docs/Tutorial/Design#database-versioning
-  configs.forEach(({ version, collections, upgrade }) => {
+  for (const config of configs) {
+    const { version, collections, upgrade } = config;
     const dbSchema: { [key: string]: string } = {};
     collections.forEach(({ name, schema }) => (dbSchema[name] = schema));
     const stores = db.version(version).stores(dbSchema);
     if (upgrade) {
       stores.upgrade(upgrade);
     }
-  });
+  }
 
   return db;
 };
@@ -46,15 +48,17 @@ export const dbDelete = (dbName: string): void => {
   Dexie.delete(dbName);
 };
 
-export const enum FileOrder {
+export const enum OrderDirection {
   Asc,
   Desc,
 }
 
+export type SearchOrder<T> = keyof T | 'random';
+
 export interface IDbRequest<T> {
   count?: number;
-  order?: keyof T;
-  fileOrder?: FileOrder;
+  order?: SearchOrder<T>;
+  orderDirection?: OrderDirection;
 }
 
 export interface IDbQueryRequest<T> extends IDbRequest<T> {
@@ -87,23 +91,38 @@ export default class BaseRepository<T extends IResource> {
     return this.collection.bulkGet(ids);
   }
 
-  public async getAll({ count, order, fileOrder }: IDbRequest<T>): Promise<T[]> {
-    const col = order ? this.collection.orderBy(order as string) : this.collection;
+  public async getByKey(key: keyof T, value: IndexableType): Promise<T[]> {
+    return this.collection
+      .where(key as string)
+      .equals(value)
+      .toArray();
+  }
+
+  public async getAll({ count, order, orderDirection }: IDbRequest<T>): Promise<T[]> {
+    const col =
+      order && order !== 'random' ? this.collection.orderBy(order as string) : this.collection;
     const res = await (count ? col.limit(count) : col).toArray();
-    return fileOrder === FileOrder.Desc ? res.reverse() : res;
+    return order === 'random'
+      ? shuffleArray(res)
+      : orderDirection === OrderDirection.Desc
+      ? res.reverse()
+      : res;
   }
 
   public async find(req: IDbQueryRequest<T>): Promise<T[]> {
-    const { order, fileOrder } = req;
+    const { order, orderDirection } = req;
     let table = await this._find(req, req.matchAny ? 'or' : 'and');
-    table = fileOrder === FileOrder.Desc ? table.reverse() : table;
+    table = orderDirection === OrderDirection.Desc ? table.reverse() : table;
 
-    // table.reverse() can be an order of magnitude slower as a javascript .reverse() call at the end
-    // (tested at ~5000 items, 500ms instead of 100ms)
-    // easy to verify here https://jsfiddle.net/dfahlander/xf2zrL4p
-
-    const res = await (order ? table.sortBy(order as string) : table.toArray());
-    return order === FileOrder.Desc ? res.reverse() : res;
+    if (order === 'random') {
+      return shuffleArray(await table.toArray());
+    } else {
+      // table.reverse() can be an order of magnitude slower as a javascript .reverse() call at the end
+      // (tested at ~5000 items, 500ms instead of 100ms)
+      // easy to verify here https://jsfiddle.net/dfahlander/xf2zrL4p
+      const res = await (order ? table.sortBy(order as string) : table.toArray());
+      return order === OrderDirection.Desc ? res.reverse() : res;
+    }
 
     // Slower alternative
     // table = count ? table.limit(count) : table;
@@ -284,7 +303,7 @@ export default class BaseRepository<T extends IResource> {
     ] as const;
 
     if ((dbStringOperators as readonly string[]).includes(crit.operator)) {
-      const funcName = (crit.operator as unknown) as typeof dbStringOperators[number];
+      const funcName = crit.operator as unknown as typeof dbStringOperators[number];
       return where[funcName](crit.value);
     }
     // Use normal string filter as fallback for functions not supported by the DB
@@ -302,9 +321,9 @@ export default class BaseRepository<T extends IResource> {
         case 'notEqual':
           return (t: any) => (t[key] as string).toLowerCase() !== valLow;
         case 'contains':
-          return (t: any) => (t[key] as string).toLowerCase().indexOf(valLow) !== -1;
+          return (t: any) => (t[key] as string).toLowerCase().includes(valLow);
         case 'notContains':
-          return (t: any) => (t[key] as string).toLowerCase().indexOf(valLow) === -1;
+          return (t: any) => !(t[key] as string).toLowerCase().includes(valLow);
         case 'startsWith':
           return (t: any) => (t[key] as string).toLowerCase().startsWith(valLow);
         case 'notStartsWith':

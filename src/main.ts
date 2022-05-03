@@ -18,7 +18,8 @@ import TrayIcon from '../resources/logo/png/full-color/allusion-logomark-fc-256x
 import AppIcon from '../resources/logo/png/full-color/allusion-logomark-fc-512x512.png';
 import TrayIconMac from '../resources/logo/png/black/allusionTemplate@2x.png'; // filename convention: https://www.electronjs.org/docs/api/native-image#template-image
 import ClipServer, { IImportItem } from './clipper/server';
-import { isDev } from './config';
+import { createBugReport, githubUrl } from '../common/config';
+import { IS_DEV, IS_MAC } from '../common/process';
 import { ITag, ROOT_TAG_ID } from './entities/Tag';
 import { MainMessenger, WindowSystemButtonPress } from './Messaging';
 import { Rectangle } from 'electron/main';
@@ -63,7 +64,7 @@ function initialize() {
 
   // Initialize preferences file and its consequences
   try {
-    if (!fse.pathExists(basePath)) {
+    if (!fse.pathExistsSync(basePath)) {
       fse.mkdirSync(basePath);
     }
     try {
@@ -91,8 +92,6 @@ function createWindow() {
     webPreferences: {
       nodeIntegration: true,
       nodeIntegrationInWorker: true,
-      // window.open should open a normal window like in a browser, not an electron BrowserWindowProxy
-      nativeWindowOpen: true,
       nodeIntegrationInSubFrames: true,
       contextIsolation: false,
     },
@@ -113,7 +112,7 @@ function createWindow() {
   // Customize new window opening
   // https://www.electronjs.org/docs/api/window-open
   mainWindow.webContents.setWindowOpenHandler(({ frameName }) => {
-    if (mainWindow === null || mainWindow?.isDestroyed()) {
+    if (mainWindow === null || mainWindow.isDestroyed()) {
       return { action: 'deny' };
     }
 
@@ -149,19 +148,19 @@ function createWindow() {
   });
 
   mainWindow.webContents.on('did-create-window', (childWindow) => {
-    if (mainWindow === null || mainWindow?.isDestroyed()) {
+    if (mainWindow === null || mainWindow.isDestroyed()) {
       return;
     }
 
     childWindow.center(); // "center" in additionalOptions doesn't work :/
     childWindow.setMenu(null); // no toolbar needed
 
-    if (isDev()) {
+    if (IS_DEV) {
       childWindow.webContents.openDevTools();
     }
 
     mainWindow.webContents.once('will-navigate', () => {
-      if (!childWindow?.isDestroyed()) {
+      if (!childWindow.isDestroyed()) {
         childWindow.close(); // close when main window is reloaded
       }
     });
@@ -206,7 +205,7 @@ function createWindow() {
       {
         label: 'Quit',
         accelerator: 'Command+Q',
-        click: () => process.exit(0),
+        click: () => app.quit(),
       },
     ],
   });
@@ -220,12 +219,14 @@ function createWindow() {
     label: 'View',
     submenu: [
       {
-        // FIXME: Just reloading window crashes due to an Electron bug related
-        // to WASM.
-        // A restart of the whole electron app circumvents that but not always.
         label: 'Reload',
         accelerator: 'CommandOrControl+R',
         click: forceRelaunch,
+      },
+      {
+        label: 'Refresh',
+        accelerator: 'F5',
+        click: (_, win) => win?.webContents.reload(),
       },
       { role: 'toggleDevTools' },
       { type: 'separator' },
@@ -279,7 +280,7 @@ function createWindow() {
   }
 
   // Open the DevTools if in dev mode.
-  if (isDev()) {
+  if (IS_DEV) {
     mainWindow.webContents.openDevTools();
   }
 
@@ -394,7 +395,7 @@ function createTrayMenu() {
       },
       {
         label: 'Quit',
-        click: () => process.exit(0),
+        click: () => app.quit(),
       },
     ]);
     tray.setContextMenu(trayMenu);
@@ -456,7 +457,7 @@ app.on('activate', () => {
 // - Only download and install when user agrees
 autoUpdater.autoDownload = false;
 let hasCheckedForUpdateOnStartup = false;
-if (isDev()) {
+if (IS_DEV) {
   autoUpdater.updateConfigPath = path.join(__dirname, '..', 'dev-app-update.yml');
 }
 
@@ -547,7 +548,7 @@ process.on('uncaughtException', async (error) => {
   console.error('Uncaught exception', error);
 
   const errorMessage = `An unexpected error occurred. Please file a bug report if you think this needs fixing!\n${
-    error?.stack?.includes(error.message) ? '' : `${error.name}: ${error.message.slice(0, 200)}\n`
+    error.stack?.includes(error.message) ? '' : `${error.name}: ${error.message.slice(0, 200)}\n`
   }\n${error.stack?.slice(0, 300)}`;
 
   try {
@@ -557,14 +558,21 @@ process.on('uncaughtException', async (error) => {
         type: 'error',
         title: 'Unexpected error',
         message: errorMessage,
-        buttons: ['Restart Allusion', 'Quit Allusion', 'Try to keep running'],
+        buttons: ['Try to keep running', 'File bug report', 'Restart Allusion', 'Quit Allusion'],
       });
       if (dialogResult.response === 0) {
-        forceRelaunch(); // Restart
-      } else if (dialogResult.response === 1) {
-        app.exit(0); // Quit
-      } else if (dialogResult.response === 2) {
         // Keep running
+      } else if (dialogResult.response === 1) {
+        // File bug report
+        const encodedBody = encodeURIComponent(
+          createBugReport(error.stack || error.name + ': ' + error.message, getVersion()),
+        );
+        const url = `${githubUrl}/issues/new?body=${encodedBody}`;
+        shell.openExternal(url);
+      } else if (dialogResult.response === 2) {
+        forceRelaunch(); // Restart
+      } else if (dialogResult.response === 3) {
+        app.exit(0); // Quit
       }
     } else {
       // No main window, show a fallback dialog
@@ -573,15 +581,15 @@ process.on('uncaughtException', async (error) => {
     }
   } catch (e) {
     console.error('Could not show error dialog', e);
-    process.exit(1);
+    app.exit(1);
   }
 });
 
 //---------------------------------------------------------------------------------//
 // Messaging: Sending and receiving messages between the main and renderer process //
 //---------------------------------------------------------------------------------//
-MainMessenger.onIsClipServerRunning(() => clipServer!.isEnabled());
-MainMessenger.onIsRunningInBackground(() => clipServer!.isRunInBackgroundEnabled());
+MainMessenger.onIsClipServerRunning(() => clipServer?.isEnabled() === true);
+MainMessenger.onIsRunningInBackground(() => clipServer?.isRunInBackgroundEnabled() === true);
 
 MainMessenger.onSetClipServerEnabled(({ isClipServerRunning }) =>
   clipServer?.setEnabled(isClipServerRunning),
@@ -631,50 +639,53 @@ MainMessenger.onSendPreviewFiles((msg) => {
 // Set native window theme (frame, menu bar)
 MainMessenger.onSetTheme((msg) => (nativeTheme.themeSource = msg.theme));
 
-MainMessenger.onDragExport((absolutePaths) => {
+MainMessenger.onDragExport(async (absolutePaths) => {
   if (mainWindow === null || absolutePaths.length === 0) {
     return;
   }
 
-  // TODO: should use the thumbnail used in the renderer process here, so formats not natively supported (e.g. webp) can be used as well
   let previewIcon = nativeImage.createEmpty();
   try {
-    previewIcon = nativeImage.createFromPath(absolutePaths[0]);
+    previewIcon = await nativeImage.createThumbnailFromPath(absolutePaths[0], {
+      width: 200,
+      height: 200,
+    });
   } catch (e) {
     console.error('Could not create drag icon', absolutePaths[0], e);
-  }
-
-  const isPreviewEmpty = previewIcon.isEmpty();
-  if (!isPreviewEmpty) {
-    // Resize preview to something resonable: taking into account aspect ratio
-    const ratio = previewIcon.getAspectRatio();
-    const size = previewIcon.getSize();
-    const targetThumbSize = 200;
-    if (size.width > targetThumbSize || size.height > targetThumbSize) {
-      previewIcon =
-        ratio > 1
-          ? previewIcon.resize({ width: targetThumbSize })
-          : previewIcon.resize({ height: targetThumbSize });
+    try {
+      const fallbackIconPath = path.join(__dirname, TrayIcon);
+      previewIcon = await nativeImage.createThumbnailFromPath(fallbackIconPath, {
+        width: 200,
+        height: 200,
+      });
+    } catch (e) {
+      console.error('Could not create fallback drag icon', TrayIcon, e);
     }
   }
 
-  // Need to cast item as `any` since the types are not correct. The `files` field is allowed but
-  // not according to the electron documentation where it is `file`.
   mainWindow.webContents.startDrag({
+    file: absolutePaths[0],
     files: absolutePaths,
     // Just show the first image as a thumbnail for now
     // TODO: Show some indication that multiple images are dragged, would be cool to show a stack of the first few of them
-    icon: isPreviewEmpty ? AppIcon : previewIcon,
-  } as any);
+    // TODO: The icon doesn't seem to work at all since we upgraded Electron a while back
+    icon: previewIcon,
+  });
 });
 
 MainMessenger.onClearDatabase(forceRelaunch);
 
 MainMessenger.onToggleDevTools(() => mainWindow?.webContents.toggleDevTools());
 
-MainMessenger.onReload(forceRelaunch);
+MainMessenger.onReload((frontEndOnly) =>
+  frontEndOnly ? mainWindow?.webContents.reload() : forceRelaunch(),
+);
 
 MainMessenger.onOpenDialog(dialog);
+
+MainMessenger.onMessageBox(dialog);
+
+MainMessenger.onMessageBoxSync(dialog);
 
 MainMessenger.onGetPath((path) => app.getPath(path));
 
@@ -731,11 +742,10 @@ MainMessenger.onToggleCheckUpdatesOnStartup(() => {
   });
 });
 
-MainMessenger.onIsCheckUpdatesOnStartupEnabled(() => !!preferences.checkForUpdatesOnStartup);
+MainMessenger.onIsCheckUpdatesOnStartupEnabled(() => preferences.checkForUpdatesOnStartup === true);
 
 // Helper functions and variables/constants
 
-const IS_MAC = process.platform === 'darwin';
 const MIN_ZOOM_FACTOR = 0.5;
 const MAX_ZOOM_FACTOR = 2;
 const MIN_WINDOW_WIDTH = 240;
@@ -798,7 +808,9 @@ function getPreviousWindowState(): Electron.Rectangle & { isMaximized?: boolean 
 // Save window position and bounds: https://github.com/electron/electron/issues/526
 let saveBoundsTimeout: ReturnType<typeof setTimeout> | null = null;
 function saveWindowState() {
-  if (saveBoundsTimeout) clearTimeout(saveBoundsTimeout);
+  if (saveBoundsTimeout) {
+    clearTimeout(saveBoundsTimeout);
+  }
   saveBoundsTimeout = setTimeout(() => {
     saveBoundsTimeout = null;
     if (mainWindow !== null) {
@@ -817,7 +829,7 @@ function forceRelaunch() {
 }
 
 function getVersion(): string {
-  if (isDev()) {
+  if (IS_DEV) {
     // Weird quirk: it returns the Electron version in dev mode
     // eslint-disable-next-line @typescript-eslint/no-var-requires
     return require('../package.json').version;

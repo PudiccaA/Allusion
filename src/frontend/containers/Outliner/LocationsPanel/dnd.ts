@@ -1,15 +1,31 @@
 import fse from 'fs-extra';
 import path from 'path';
-import { IMG_EXTENSIONS } from 'src/entities/File';
+import { ClientFile, IMG_EXTENSIONS } from 'src/entities/File';
 import { ALLOWED_DROP_TYPES } from 'src/frontend/contexts/DropContext';
-import { timeoutPromise } from 'src/frontend/utils';
+import { retainArray } from 'common/core';
+import { timeoutPromise } from 'common/timeout';
 import { IStoreFileMessage, RendererMessenger } from 'src/Messaging';
 import { DnDAttribute } from 'src/frontend/contexts/TagDnDContext';
+import FileStore from 'src/frontend/stores/FileStore';
+import { action } from 'mobx';
 
 const ALLOWED_FILE_DROP_TYPES = IMG_EXTENSIONS.map((ext) => `image/${ext}`);
 
 export const isAcceptableType = (e: React.DragEvent) =>
-  e.dataTransfer?.types.some((type) => ALLOWED_DROP_TYPES.includes(type));
+  e.dataTransfer.types.some((type) => ALLOWED_DROP_TYPES.includes(type));
+
+/** Returns the IDs of the files that match those in Allusion given dropData. Returns false if one or files has no matches */
+export const findDroppedFileMatches = action(
+  (dropData: (File | string)[], fs: FileStore): ClientFile[] | false => {
+    const matches = dropData.map(
+      (file) =>
+        typeof file !== 'string' &&
+        file.path &&
+        fs.fileList.find((f) => f.absolutePath === file.path),
+    );
+    return matches.every((m): m is ClientFile => m instanceof ClientFile) ? matches : false;
+  },
+);
 
 /**
  * Executed callback function while dragging over a target.
@@ -41,19 +57,17 @@ export function handleDragLeave(event: React.DragEvent<HTMLDivElement>) {
   }
 }
 
-export async function storeDroppedImage(e: React.DragEvent, directory: string) {
-  e.persist();
-  const dropData = await getDropData(e);
+export async function storeDroppedImage(dropData: (string | File)[], directory: string) {
   for (const dataItem of dropData) {
     let fileData: IStoreFileMessage | undefined;
 
     // Store file -> detected by watching the directory -> automatically imported
     if (dataItem instanceof File) {
-      const file = await fse.readFile(dataItem.path);
+      const buffer = dataItem.path ? await fse.readFile(dataItem.path) : dataItem;
       fileData = {
         directory,
         filenameWithExt: path.basename(dataItem.path),
-        imgBase64: file.toString('base64'),
+        imgBase64: buffer.toString('base64'),
       };
     } else if (typeof dataItem === 'string') {
       // It's probably a URL, so we can download it to get the image data
@@ -121,7 +135,7 @@ function getFilenameFromUrl(url: string, fallback: string) {
   return index !== -1 ? pathname.substring(index + 1) : pathname;
 }
 
-async function getDropData(e: React.DragEvent): Promise<Array<File | string>> {
+export async function getDropData(e: React.DragEvent): Promise<Array<File | string>> {
   // Using a set to filter out duplicates. For some reason, dropping URLs duplicates them 3 times (for me)
   const dropItems = new Set<File | string>();
 
@@ -131,7 +145,7 @@ async function getDropData(e: React.DragEvent): Promise<Array<File | string>> {
     for (let i = 0; i < e.dataTransfer.files.length; i++) {
       const file = e.dataTransfer.files[i];
       // Check if file is an image
-      if (file && ALLOWED_FILE_DROP_TYPES.includes(file.type)) {
+      if (ALLOWED_FILE_DROP_TYPES.includes(file.type)) {
         dropItems.add(file);
       }
     }
@@ -154,21 +168,21 @@ async function getDropData(e: React.DragEvent): Promise<Array<File | string>> {
     }
   }
 
+  const imageItems = Array.from(dropItems);
   // Filter out URLs that are not an image
-  const imageItems = await Promise.all(
-    Array.from(dropItems).filter((item) => {
+  const imageChecks = await Promise.all(
+    imageItems.map(async (item) => {
       if (item instanceof File) {
         return true;
-      } else {
         // Check if the URL has an image extension, or perform a network request
-        if (IMG_EXTENSIONS.some((ext) => item.toLowerCase().indexOf(`.${ext}`) !== -1)) {
-          return true;
-        } else {
-          return testImage(item);
-        }
+      } else if (IMG_EXTENSIONS.some((ext) => item.toLowerCase().includes(`.${ext}`))) {
+        return true;
+      } else {
+        return await testImage(item);
       }
     }),
   );
-
+  // Remove all items that are not images from the array.
+  retainArray(imageItems, (_, i) => imageChecks[i]);
   return imageItems;
 }

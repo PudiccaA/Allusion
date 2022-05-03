@@ -79,7 +79,7 @@
 
 [aria-selected='true'] > .thumbnail {
   // If selected, show a blue border
-  background-color: var(--accent-color-blue);
+  background-color: var(--accent-color);
   > img,
   > .image-error {
     clip-path: inset(0.25rem round 0.125rem); // old design
@@ -153,12 +153,12 @@
 }
 
 .image-loading {
-  width: var(--thumbnail-size, 100px);
-  height: var(--thumbnail-size, 100px);
+  width: 2rem;
+  aspect-ratio: 1 / 1;
   margin: auto;
   border-radius: 50%;
   border: 0.25rem solid var(--background-color);
-  border-top-color: var(--accent-color-blue);
+  border-top-color: var(--accent-color);
   animation: 1.5s spin infinite linear;
 
   @keyframes spin {
@@ -186,7 +186,7 @@
     contain: layout size;
 
     &[aria-selected='true'] {
-      background-color: var(--accent-color-blue);
+      background-color: var(--accent-color);
       color: white;
     }
 
@@ -265,7 +265,7 @@
 
     &:active,
     &:hover {
-      background-color: var(--accent-color-blue);
+      background-color: var(--accent-color);
     }
   }
 
@@ -420,6 +420,14 @@
   .side-button-right {
     right: 0;
   }
+
+  img {
+    // Let the compositor know that the image will transform for better performance
+    will-change: transform;
+  
+    cursor: pointer;
+    transform-origin: 0 0;
+  }
 }
 
 #content-placeholder {
@@ -480,7 +488,10 @@
       max-height: 2.8em;
       max-width: 100%;
 
-      > * {
+      // Allow dragging of images to elsewhere here too, just like the .thumbnail itself (drag-export)
+      -webkit-user-drag: element;
+
+      > .tag {
         margin: 0.25em;
       }
     }
