@@ -1,10 +1,12 @@
 import fse from 'fs-extra';
 import path from 'path';
-import { ClientFile, IMG_EXTENSIONS } from 'src/entities/File';
+import { ClientFile } from 'src/entities/File';
+import { IMG_EXTENSIONS } from 'src/api/file';
 import { ALLOWED_DROP_TYPES } from 'src/frontend/contexts/DropContext';
 import { retainArray } from 'common/core';
 import { timeoutPromise } from 'common/timeout';
-import { IStoreFileMessage, RendererMessenger } from 'src/Messaging';
+import { StoreFileMessage } from 'src/ipc/messages';
+import { RendererMessenger } from 'src/ipc/renderer';
 import { DnDAttribute } from 'src/frontend/contexts/TagDnDContext';
 import FileStore from 'src/frontend/stores/FileStore';
 import { action } from 'mobx';
@@ -59,7 +61,7 @@ export function handleDragLeave(event: React.DragEvent<HTMLDivElement>) {
 
 export async function storeDroppedImage(dropData: (string | File)[], directory: string) {
   for (const dataItem of dropData) {
-    let fileData: IStoreFileMessage | undefined;
+    let fileData: StoreFileMessage | undefined;
 
     // Store file -> detected by watching the directory -> automatically imported
     if (dataItem instanceof File) {
@@ -85,17 +87,11 @@ export async function storeDroppedImage(dropData: (string | File)[], directory: 
       // Send base64 file to main process, get back filename where it is stored
       // So it can be tagged immediately
       // Filename will be incremented if file already exists, e.g. `image.jpg -> image 1.jpg`
-      const reply = await RendererMessenger.storeFile({ directory, filenameWithExt, imgBase64 });
-
-      let rejected = false;
-      const timeout = setTimeout(() => {
-        rejected = true;
-        console.error('Could not store dropped image in backend');
-      }, 5000);
-
-      if (!rejected) {
-        clearTimeout(timeout);
-        console.log('Imported file', reply.downloadPath);
+      try {
+        const reply = await RendererMessenger.storeFile({ directory, filenameWithExt, imgBase64 });
+        console.log('Imported dropped file', reply.downloadPath);
+      } catch (e) {
+        console.error('Could not import file', e);
       }
     }
   }

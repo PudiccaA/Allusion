@@ -4,7 +4,7 @@ import { Stats } from 'fs';
 import { BigIntStats } from 'original-fs';
 import SysPath from 'path';
 import { RECURSIVE_DIR_WATCH_DEPTH } from 'common/config';
-import { IMG_EXTENSIONS_TYPE } from 'src/entities/File';
+import { IMG_EXTENSIONS_TYPE } from 'src/api/file';
 import { FileStats } from '../stores/LocationStore';
 
 const ctx: Worker = self as any;
@@ -71,6 +71,7 @@ export class FolderWatcherWorker {
           // * not a directory, and not an image file either.
           return !stats.isDirectory() || SysPath.basename(path).startsWith('.');
         }
+        return false;
       },
     });
 
