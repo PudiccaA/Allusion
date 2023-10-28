@@ -1,10 +1,11 @@
 import { action } from 'mobx';
 import { observer } from 'mobx-react-lite';
 import React, { useState } from 'react';
-import { ClientTag } from 'src/entities/Tag';
-import { useStore } from 'src/frontend/contexts/StoreContext';
+
 import { Button, GridCombobox, GridOption, GridOptionCell, IconSet, Tag } from 'widgets';
 import { Dialog } from 'widgets/popovers';
+import { useStore } from '../../../contexts/StoreContext';
+import { ClientTag } from '../../../entities/Tag';
 
 interface TagMergeProps {
   tag: ClientTag;
@@ -96,13 +97,9 @@ const renderTagOption = action((tag: ClientTag, index: number, selection: boolea
   const hint = path.slice(0, Math.max(0, path.length - tag.name.length - 3));
 
   return (
-    <GridOption key={id} rowIndex={index} selected={selection || undefined} data-tooltip={path}>
+    <GridOption key={id} rowIndex={index} selected={selection || undefined} tooltip={path}>
       <GridOptionCell id={id} colIndex={1}>
-        <span
-          className="combobox-popup-option-icon"
-          style={{ color: tag.viewColor }}
-          aria-hidden={true}
-        >
+        <span className="combobox-popup-option-icon" style={{ color: tag.viewColor }}>
           {IconSet.TAG}
         </span>
         {tag.name}

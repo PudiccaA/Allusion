@@ -1,9 +1,7 @@
-import React, { useEffect, useRef } from 'react';
-import { IconSet } from 'widgets/Icons';
-import { generateWidgetId } from 'widgets/utility';
+import React, { useEffect, useId, useRef } from 'react';
+import { IconSet } from 'widgets/icons';
 
 import 'widgets/utility/utility.scss';
-import './popover.scss';
 
 export interface DialogProps {
   open: boolean;
@@ -19,7 +17,7 @@ export const Dialog = (props: DialogProps) => {
   const { open, title, icon, describedby, onClose, onCancel, children } = props;
 
   const dialog = useRef<HTMLDialogElement>(null);
-  const dialogTitle = useRef(generateWidgetId('__dialog-title')).current;
+  const dialogTitleId = useId();
 
   useEffect(() => {
     const element = dialog.current;
@@ -47,16 +45,14 @@ export const Dialog = (props: DialogProps) => {
   }, [open]);
 
   return (
-    <dialog ref={dialog} aria-labelledby={dialogTitle} aria-describedby={describedby}>
+    <dialog ref={dialog} aria-labelledby={dialogTitleId} aria-describedby={describedby}>
       <div className="dialog-header">
-        <span aria-hidden="true" className="dialog-icon">
-          {icon}
-        </span>
-        <span id={dialogTitle} className="dialog-title">
+        <span className="dialog-icon">{icon}</span>
+        <span id={dialogTitleId} className="dialog-title">
           {title}
         </span>
         <button aria-keyshortcuts="Esc" className="btn-icon dialog-close" onClick={onCancel}>
-          <span aria-hidden="true">{IconSet.CLOSE}</span>
+          {IconSet.CLOSE}
           <span className="visually-hidden">Close</span>
         </button>
       </div>

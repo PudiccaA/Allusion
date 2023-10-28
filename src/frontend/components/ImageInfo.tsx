@@ -1,14 +1,15 @@
-import { shell } from 'electron';
 import fse from 'fs-extra';
 import React, { ReactNode, useCallback, useEffect, useState } from 'react';
-import { ClientFile } from 'src/entities/File';
-import { useStore } from '../contexts/StoreContext';
-import { usePromise } from '../hooks/usePromise';
+
 import { formatDateTime, humanFileSize } from 'common/fmt';
-import { IconSet } from 'widgets/Icons';
-import { Toolbar, ToolbarButton } from 'widgets/Toolbar';
+import { IconSet } from 'widgets/icons';
+import { Toolbar, ToolbarButton } from 'widgets/toolbar';
+import { RendererMessenger } from '../../ipc/renderer';
+import { useStore } from '../contexts/StoreContext';
+import { ClientFile } from '../entities/File';
+import { usePromise } from '../hooks/usePromise';
+import ExternalLink from './ExternalLink';
 import { AppToaster } from './Toaster';
-import { RendererMessenger } from 'src/ipc/renderer';
 
 type CommonMetadata = {
   name: string;
@@ -44,23 +45,11 @@ const exifFields: Record<string, ExifField> = {
       if (!url) {
         return ' ';
       }
-      return (
-        <a
-          href={url}
-          title={url}
-          target="_blank"
-          rel="noreferrer"
-          onClick={(e) => {
-            e.preventDefault();
-            shell.openExternal(url);
-          }}
-        >
-          {url}
-        </a>
-      );
+      return <ExternalLink url={url}>{url}</ExternalLink>;
     },
   },
   ImageDescription: { label: 'Description', modifiable: true },
+  Parameters: { label: 'Parameters' },
   Copyright: { label: 'Copyright', modifiable: true },
   Make: { label: 'Camera Manufacturer' },
   Model: { label: 'Camera Model' },
@@ -73,6 +62,8 @@ const exifFields: Record<string, ExifField> = {
 };
 
 const exifTags = Object.keys(exifFields);
+
+const stopPropagation = (e: React.KeyboardEvent<HTMLInputElement>) => e.stopPropagation();
 
 interface ImageInfoProps {
   file: ClientFile;
@@ -220,7 +211,7 @@ const ImageInfo = ({ file }: ImageInfoProps) => {
                   {!isEditingMode ? (
                     field.format?.(value || '') || value
                   ) : (
-                    <input defaultValue={value || ''} name={key} />
+                    <input defaultValue={value || ''} name={key} onKeyDown={stopPropagation} />
                   )}
                 </td>
               </tr>

@@ -1,33 +1,31 @@
-import { action, observable, computed, makeObservable } from 'mobx';
+import { action, computed, makeObservable, observable } from 'mobx';
 
-import { IDataStorage } from 'src/api/data-storage';
-
-import { generateId, ID } from 'src/api/id';
-import { ClientTag } from 'src/entities/Tag';
-import { TagDTO, ROOT_TAG_ID } from 'src/api/tag';
-import { ClientTagSearchCriteria } from 'src/entities/SearchCriteria';
-
+import { DataStorage } from '../../api/data-storage';
+import { generateId, ID } from '../../api/id';
+import { ROOT_TAG_ID, TagDTO } from '../../api/tag';
+import { ClientFile } from '../entities/File';
+import { ClientTagSearchCriteria } from '../entities/SearchCriteria';
+import { ClientTag } from '../entities/Tag';
 import RootStore from './RootStore';
-import { ClientFile } from 'src/entities/File';
 
 /**
  * Based on https://mobx.js.org/best/store.html
  */
 class TagStore {
-  private readonly backend: IDataStorage;
+  private readonly backend: DataStorage;
   private readonly rootStore: RootStore;
 
   /** A lookup map to speedup finding entities */
   private readonly tagGraph = observable(new Map<ID, ClientTag>());
 
-  constructor(backend: IDataStorage, rootStore: RootStore) {
+  constructor(backend: DataStorage, rootStore: RootStore) {
     this.backend = backend;
     this.rootStore = rootStore;
 
     makeObservable(this);
   }
 
-  async init() {
+  async init(): Promise<void> {
     try {
       const fetchedTags = await this.backend.fetchTags();
       this.createTagGraph(fetchedTags);
@@ -48,7 +46,7 @@ class TagStore {
     return this.tagGraph.get(tag);
   }
 
-  @computed get root() {
+  @computed get root(): ClientTag {
     const root = this.tagGraph.get(ROOT_TAG_ID);
     if (!root) {
       throw new Error('Root tag not found. This should not happen!');
@@ -88,7 +86,7 @@ class TagStore {
     );
   }
 
-  @action.bound async create(parent: ClientTag, tagName: string) {
+  @action.bound async create(parent: ClientTag, tagName: string): Promise<ClientTag> {
     const id = generateId();
     const tag = new ClientTag(this, id, tagName, new Date(), '', false);
     this.tagGraph.set(tag.id, tag);
@@ -102,7 +100,7 @@ class TagStore {
     return this.tagList.find((t) => t.name === name);
   }
 
-  @action.bound async delete(tag: ClientTag) {
+  @action.bound async delete(tag: ClientTag): Promise<void> {
     const {
       rootStore: { uiStore, fileStore },
       tagGraph,
@@ -119,7 +117,7 @@ class TagStore {
     fileStore.refetch();
   }
 
-  @action.bound async deleteTags(tags: ClientTag[]) {
+  @action.bound async deleteTags(tags: ClientTag[]): Promise<void> {
     const {
       rootStore: { uiStore, fileStore },
       tagGraph,
@@ -141,7 +139,7 @@ class TagStore {
     fileStore.refetch();
   }
 
-  @action.bound async merge(tagToBeRemoved: ClientTag, tagToMergeWith: ClientTag) {
+  @action.bound async merge(tagToBeRemoved: ClientTag, tagToMergeWith: ClientTag): Promise<void> {
     // not dealing with tags that have subtags
     if (tagToBeRemoved.subTags.length > 0) {
       throw new Error('Merging a tag with sub-tags is currently not supported.');
@@ -153,11 +151,11 @@ class TagStore {
     this.rootStore.fileStore.refetch();
   }
 
-  @action.bound refetchFiles() {
+  @action.bound refetchFiles(): void {
     this.rootStore.fileStore.refetch();
   }
 
-  save(tag: TagDTO) {
+  save(tag: TagDTO): void {
     this.backend.saveTag(tag);
   }
 

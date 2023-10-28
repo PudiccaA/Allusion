@@ -1,10 +1,11 @@
 import React, { RefObject, memo, useState } from 'react';
-import { IconButton } from 'widgets/Button';
-import { IconSet } from 'widgets/Icons';
+
+import { IconButton } from 'widgets/button';
+import { IconSet } from 'widgets/icons';
 import { InfoButton } from 'widgets/notifications';
-import { defaultQuery, generateCriteriaId } from './data';
 import { KeySelector, OperatorSelector, ValueInput } from './Inputs';
 import { QueryDispatch } from './QueryEditor';
+import { defaultQuery, generateCriteriaId } from './data';
 
 export interface QueryBuilderProps {
   keySelector: RefObject<HTMLSelectElement>;
@@ -22,8 +23,8 @@ const CriteriaBuilder = memo(function QueryBuilder({ keySelector, dispatch }: Qu
 
   return (
     <fieldset aria-labelledby="criteria-builder-label">
-      <div style={{ display: 'flex' }}>
-        <legend id="criteria-builder-label">Criteria Builder</legend>
+      <legend id="criteria-builder-label">
+        Criteria Builder
         <InfoButton>
           A criteria is made of three components:
           <ul>
@@ -47,7 +48,7 @@ const CriteriaBuilder = memo(function QueryBuilder({ keySelector, dispatch }: Qu
           </span>{' '}
           icon button next to the inputs.
         </InfoButton>
-      </div>
+      </legend>
       <div id="criteria-builder">
         <label id="builder-key">Key</label>
         <label id="builder-operator">Operator</label>

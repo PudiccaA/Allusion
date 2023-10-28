@@ -1,14 +1,15 @@
 /* eslint-disable react/no-unescaped-entities */
-import React, { useCallback, useRef, useState, memo } from 'react';
 import { observer } from 'mobx-react-lite';
-import { Button, ButtonGroup, IconSet, Split } from 'widgets';
-import Logo_About from 'resources/images/helpcenter/logo-about-helpcenter-dark.jpg';
-import { clamp } from 'common/core';
-import { useStore } from '../contexts/StoreContext';
-import PopupWindow from '../components/PopupWindow';
-import { shell } from 'electron';
+import React, { memo, useCallback, useRef, useState } from 'react';
+
 import { chromeExtensionUrl, firefoxExtensionUrl } from 'common/config';
-import { ToolbarButton } from 'widgets/Toolbar';
+import { clamp } from 'common/core';
+import Logo_About from 'resources/images/helpcenter/logo-about-helpcenter-dark.jpg';
+import { Button, ButtonGroup, IconSet, Split } from 'widgets';
+import { ToolbarButton } from 'widgets/toolbar';
+import ExternalLink from '../components/ExternalLink';
+import PopupWindow from '../components/PopupWindow';
+import { useStore } from '../contexts/StoreContext';
 
 const HelpCenter = observer(() => {
   const { uiStore } = useStore();
@@ -306,25 +307,8 @@ const PAGE_DATA: () => IPageData[] = () => [
               Edge is available. It allows you to import images into Allusion directly from your web
               browser and immediately tag them as well. Take a look in the "Background Processes"
               section in the settings window for more information. Get the extension here from{' '}
-              <a
-                href={chromeExtensionUrl}
-                onClick={(e) => {
-                  e.preventDefault();
-                  shell.openExternal(chromeExtensionUrl);
-                }}
-              >
-                Chrome Webstore
-              </a>{' '}
-              or for{' '}
-              <a
-                href={firefoxExtensionUrl}
-                onClick={(e) => {
-                  e.preventDefault();
-                  shell.openExternal(firefoxExtensionUrl);
-                }}
-              >
-                FireFox.
-              </a>
+              <ExternalLink url={chromeExtensionUrl}>Chrome Webstore</ExternalLink> or for{' '}
+              <ExternalLink url={firefoxExtensionUrl}>Firefox</ExternalLink>.
             </p>
           </>
         ),

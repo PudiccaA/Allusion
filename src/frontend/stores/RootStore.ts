@@ -1,6 +1,7 @@
 import { configure, runInAction } from 'mobx';
 
-import { IDataStorage } from 'src/api/data-storage';
+import { DataStorage } from 'src/api/data-storage';
+import { DataBackup } from 'src/api/data-backup';
 
 import FileStore from './FileStore';
 import TagStore from './TagStore';
@@ -12,7 +13,7 @@ import ImageLoader from '../image/ImageLoader';
 import { RendererMessenger } from 'src/ipc/renderer';
 import SearchStore from './SearchStore';
 
-// This will throw exceptions whenver we try to modify the state directly without an action
+// This will throw exceptions whenever we try to modify the state directly without an action
 // Actions will batch state modifications -> better for performance
 // https://mobx.js.org/refguide/action.html
 configure({ observableRequiresReaction: true, reactionRequiresObservable: true });
@@ -28,6 +29,9 @@ configure({ observableRequiresReaction: true, reactionRequiresObservable: true }
  * 3. Makes complex unit tests easy as you just have to instantiate a root store.
  */
 class RootStore {
+  readonly #backend: DataStorage;
+  readonly #backup: DataBackup;
+
   readonly tagStore: TagStore;
   readonly fileStore: FileStore;
   readonly locationStore: LocationStore;
@@ -38,7 +42,8 @@ class RootStore {
   readonly getWindowTitle: () => string;
 
   private constructor(
-    private backend: IDataStorage,
+    backend: DataStorage,
+    backup: DataBackup,
     formatWindowTitle: (FileStore: FileStore, uiStore: UiStore) => string,
   ) {
     this.tagStore = new TagStore(backend, this);
@@ -46,13 +51,15 @@ class RootStore {
     this.locationStore = new LocationStore(backend, this);
     this.uiStore = new UiStore(this);
     this.searchStore = new SearchStore(backend, this);
+    this.#backend = backend;
+    this.#backup = backup;
     this.exifTool = new ExifIO(localStorage.getItem('hierarchical-separator') || undefined);
     this.imageLoader = new ImageLoader(this.exifTool);
     this.getWindowTitle = () => formatWindowTitle(this.fileStore, this.uiStore);
   }
 
-  static async main(backend: IDataStorage): Promise<RootStore> {
-    const rootStore = new RootStore(backend, (fileStore, uiStore) => {
+  static async main(backend: DataStorage, backup: DataBackup): Promise<RootStore> {
+    const rootStore = new RootStore(backend, backup, (fileStore, uiStore) => {
       if (uiStore.isSlideMode && fileStore.fileList.length > 0) {
         const activeFile = fileStore.fileList[uiStore.firstItem];
         return `${activeFile.filename}.${activeFile.extension} - Allusion`;
@@ -62,10 +69,10 @@ class RootStore {
     });
 
     await Promise.all([
-      // The location store must be initiated because the file entity contructor
+      // The location store must be initiated because the file entity constructor
       // uses the location reference to set values.
       rootStore.locationStore.init(),
-      // The tag store needs to be awaited because file entites have references
+      // The tag store needs to be awaited because file entities have references
       // to tag entities.
       rootStore.tagStore.init(),
       rootStore.exifTool.initialize(),
@@ -74,7 +81,7 @@ class RootStore {
     ]);
 
     // Restore preferences, which affects how the file store initializes
-    // It depends on tag store being intialized for reconstructing search criteria
+    // It depends on tag store being initialized for reconstructing search criteria
     rootStore.uiStore.recoverPersistentPreferences();
     rootStore.fileStore.recoverPersistentPreferences();
     const isSlideMode = runInAction(() => rootStore.uiStore.isSlideMode);
@@ -113,8 +120,8 @@ class RootStore {
     return rootStore;
   }
 
-  static async preview(backend: IDataStorage): Promise<RootStore> {
-    const rootStore = new RootStore(backend, (fileStore, uiStore) => {
+  static async preview(backend: DataStorage, backup: DataBackup): Promise<RootStore> {
+    const rootStore = new RootStore(backend, backup, (fileStore, uiStore) => {
       const PREVIEW_WINDOW_BASENAME = 'Allusion Quick View';
       const index = uiStore.firstItem;
       if (index >= 0 && index < fileStore.fileList.length) {
@@ -126,18 +133,20 @@ class RootStore {
     });
 
     await Promise.all([
-      // The location store must be initiated because the file entity contructor
+      // The location store must be initiated because the file entity constructor
       // uses the location reference to set values.
       rootStore.locationStore.init(),
-      // The tag store needs to be awaited because file entites have references
+      // The tag store needs to be awaited because file entities have references
       // to tag entities.
       rootStore.tagStore.init(),
-      rootStore.exifTool.initialize(),
       rootStore.imageLoader.init(),
+      // Not: not initializing exiftool.
+      // Might be needed for extracting thumbnails in preview mode, but can't be closed reliably,
+      // causing exiftool to keep running after quitting
     ]);
 
     // Restore preferences, which affects how the file store initializes
-    // It depends on tag store being intialized for reconstructing search criteria
+    // It depends on tag store being initialized for reconstructing search criteria
     rootStore.uiStore.recoverPersistentPreferences();
     rootStore.fileStore.recoverPersistentPreferences();
 
@@ -148,22 +157,27 @@ class RootStore {
   }
 
   async backupDatabaseToFile(path: string): Promise<void> {
-    return this.backend.backupToFile(path);
+    return this.#backup.backupToFile(path);
   }
 
   async restoreDatabaseFromFile(path: string): Promise<void> {
-    return this.backend.restoreFromFile(path);
+    return this.#backup.restoreFromFile(path);
   }
 
   async peekDatabaseFile(path: string): Promise<[numTags: number, numFiles: number]> {
-    return this.backend.peekFile(path);
+    return this.#backup.peekFile(path);
   }
 
   async clearDatabase(): Promise<void> {
-    await this.backend.clear();
+    await this.#backend.clear();
     RendererMessenger.clearDatabase();
     this.uiStore.clearPersistentPreferences();
     this.fileStore.clearPersistentPreferences();
+  }
+
+  async close(): Promise<void> {
+    // TODO: should be able to be done more reliably by running exiftool as a child process
+    return this.exifTool.close();
   }
 }
 
